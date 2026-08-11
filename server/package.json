@@ -1,0 +1,17 @@
+{
+  "name": "kart-royale-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LAN multiplayer relay for Kart Royale — a dumb byte-mover with rooms. See docs/multiplayer/DESIGN.md.",
+  "scripts": {
+    "start": "node relay.mjs",
+    "test:pipe": "node test-pipe.mjs"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}
