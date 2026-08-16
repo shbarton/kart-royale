@@ -87,6 +87,24 @@ const GRID_MARGIN = 2.6;
 /** how far above the road surface a grid slot is placed, along the surface normal */
 const GRID_LIFT = 0.7;
 
+/**
+ * One remote player's controls, as the host received them. The same five
+ * numbers the local player produces, plus a press COUNT for the item button —
+ * see `NetInput.itemPresses` for why an edge cannot be sent as a boolean.
+ */
+export interface RemoteCmd {
+  steer: number;
+  accel: number;
+  /** true when the throttle is the auto-accelerate assist, not a decision */
+  accelAuto: boolean;
+  brake: number;
+  drift: boolean;
+  /** item presses to consume this frame; usually 0, occasionally 2 */
+  itemUses: number;
+  /** fire the item backwards */
+  back: boolean;
+}
+
 interface Progress {
   /** -1 = formed up behind the line, 0 = on lap 1 */
   lapIndex: number;
@@ -190,6 +208,37 @@ export class Race implements IRace {
     steer: 0, throttle: 0, brake: 0, drift: false, useItem: false, itemBackwards: false,
   };
 
+  // --------------------------------------------------------------- multiplayer
+  // Three flags and one callback are the entire footprint of networking on the
+  // race director. Everything else — sockets, snapshots, interpolation, the
+  // lobby — lives in `src/net/` and never touches this file. See
+  // `docs/multiplayer/DESIGN.md`.
+
+  /**
+   * True on BOTH ends of a network race. It only does one thing: it stops the
+   * grid from swapping the human onto pole (`slotFor`). That swap is right for
+   * a single-player race and wrong here — with four humans each swapping their
+   * own kart to the front, no two machines would agree on the formation, and
+   * every client would spend the countdown being dragged from the slot it put
+   * itself in to the one the host actually used.
+   */
+  netMode = false;
+
+  /**
+   * True on a machine that is NOT the authority. A client simulates exactly one
+   * kart — its own — and poses the rest from snapshots; it counts no laps,
+   * rolls no items and runs no marshals, because all of those would be a second
+   * opinion on a question the host has already answered.
+   */
+  netClient = false;
+
+  /**
+   * Host only: the controls for a kart driven by a remote player, or null if
+   * that seat belongs to the AI. Called once per kart per frame, in the same
+   * place the AI would otherwise be asked.
+   */
+  netCommandFor: ((kartId: number) => RemoteCmd | null) | null = null;
+
   private ctx!: Ctx;
   private ai = new AIField();
   private items: Items | null = null;
@@ -277,6 +326,31 @@ export class Race implements IRace {
     this.start();
   }
 
+  /**
+   * Client only: adopt the host's race state.
+   *
+   * Deliberately partial. `Racing`, `Finished` and `Results` are adopted,
+   * because those are outcomes — the flag falls when the host says it falls,
+   * and a client that decided for itself would show a results board with a
+   * different winner on it.
+   *
+   * `Countdown` is NOT adopted, and that is the interesting one. Both machines
+   * enter the countdown from the same `start` message a few milliseconds apart
+   * and then run their OWN four-and-a-half seconds of lights, which stay in
+   * step because they are the same length. Adopting it from the snapshot
+   * instead would re-arm the countdown on every packet — `armCountdown` reforms
+   * the grid — so the client would spend the start being teleported back onto
+   * its slot twenty-five times a second.
+   */
+  netSetState(s: RaceState) {
+    if (!this.netClient || s === this._state) return;
+    if (s === RaceState.Paused) { this.setPaused(true); return; }
+    if (this._state === RaceState.Paused) { this.setPaused(false); return; }
+    if (s === RaceState.Racing || s === RaceState.Finished || s === RaceState.Results) {
+      this.state = s;
+    }
+  }
+
   get selectedKart(): number {
     return this.selected;
   }
@@ -310,6 +384,8 @@ export class Race implements IRace {
    * owns pole trade places, so the human always starts at the front.
    */
   private slotFor(i: number): number {
+    // Networked: everyone starts in roster order, on every machine. See `netMode`.
+    if (this.netMode) return i;
     if (this.selected === 0) return i;
     if (i === this.selected) return 0;
     if (i === 0) return this.selected;
@@ -465,6 +541,16 @@ export class Race implements IRace {
       const p = this.prog[i];
       let steer = 0, throttle = 0, brake = 0, drift = false;
 
+      // A client owns exactly one kart. The other seven are posed from the
+      // host's snapshot after this loop (`Kart.netPose`), so simulating them
+      // here would be eight chassis and eight drivers' worth of work to produce
+      // a position that is overwritten before it is ever drawn — and, worse, a
+      // second set of AI decisions and item rolls that the host never made.
+      if (this.netClient && !k.isPlayer) continue;
+
+      // Host: is this seat being driven by somebody on a phone?
+      const remote = this.netCommandFor ? this.netCommandFor(k.id) : null;
+
       if (p.respawnT > 0) {
         // dropped in: hands off until the suspension has taken the landing
         p.respawnT -= dt;
@@ -479,6 +565,19 @@ export class Race implements IRace {
           if (input.itemPressed) {
             ctx.items.use(k, input.brake > 0.5 || input.lookBack);
           }
+        } else if (remote && !k.finished && this.state !== RaceState.Results) {
+          // A remote player's controls enter the simulation at exactly the same
+          // point the local player's do, and are treated identically from here
+          // on. That is the whole of "host-authoritative": there is one
+          // simulation, and the only difference between the racers is where
+          // their steering came from.
+          steer = remote.steer;
+          throttle = remote.accel;
+          brake = remote.brake;
+          drift = remote.drift;
+          // A count, not a flag — a press that landed between two packets is
+          // still a press, and firing it late beats dropping it.
+          for (let u = 0; u < remote.itemUses; u++) ctx.items.use(k, remote.back);
         } else {
           const cmd = this.ai.drive(ctx, k, dt, this.karts, true);
           // The AI solves in the chassis' yaw frame (positive = rising yaw =
@@ -506,6 +605,14 @@ export class Race implements IRace {
           // and auto-accelerate obligingly drove it up the circuit the wrong
           // way — which is exactly what it looked like from the sofa.
           if (input.accel > 0.5 && !input.accelAuto) p.hold += dt;
+          else p.hold = 0;
+        } else if (remote) {
+          // Same rule for a remote human, and for the same reason: `accelAuto`
+          // travels over the wire precisely so the host can tell a child
+          // holding the throttle from the auto-accelerate assist holding it for
+          // them. Without that bit every phone in the race would burn out on
+          // the line, every time.
+          if (remote.accel > 0.5 && !remote.accelAuto) p.hold += dt;
           else p.hold = 0;
         }
         this.ai.drive(ctx, k, dt, this.karts, false);
@@ -538,7 +645,10 @@ export class Race implements IRace {
 
     // --- bookkeeping --------------------------------------------------------
     this.updateProgress();
-    if (rolling) this.watchdogs(ctx, dt);
+    // The marshals belong to the authority. A client that craned its own kart
+    // back onto the racing line would be moving a kart the host still has in
+    // the sand, and the next snapshot would drag it back there.
+    if (rolling && !this.netClient) this.watchdogs(ctx, dt);
     this.updateWrongWay(ctx, dt, live);
     this.updateCamera(ctx, dt);
   }
@@ -583,7 +693,10 @@ export class Race implements IRace {
       const k = this.karts[i];
       const p = this.prog[i];
       p.lapStart = 0;
-      const hold = k.isPlayer ? p.hold : this.aiRocketHold(k);
+      // A seat with a human on it — here or on a phone — earns the start it
+      // actually drove for. Only the AI gets its launch rolled for it.
+      const human = k.isPlayer || (this.netCommandFor?.(k.id) != null);
+      const hold = human ? p.hold : this.aiRocketHold(k);
       if (hold > 0.02 && hold < ROCKET_WINDOW) {
         // perfect launch
         k.applyBoost(1.35, 1.26);
@@ -655,6 +768,16 @@ export class Race implements IRace {
    * kart every frame; the whole thing is integer arithmetic on a 32-entry ring.
    */
   private updateProgress() {
+    // A client is not entitled to an opinion about who is winning. Lap, place
+    // and race distance all arrive in the snapshot, for every kart including
+    // this player's own — and a client could not compute them anyway: it
+    // simulates one kart, so the other seven have no checkpoint history here to
+    // validate. Sorting by the place we were given is the whole job.
+    if (this.netClient) {
+      this.standings.sort((a, b) => a.place - b.place);
+      return;
+    }
+
     const track = this.ctx.track;
     const L = track.length;
     const N = track.checkpointCount;

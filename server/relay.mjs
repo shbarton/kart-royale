@@ -66,7 +66,7 @@ function serveStatic(req, res) {
 // One room per race. `hostId` is the socket running the authoritative sim.
 // `players` maps socket.id -> { name, seat }. Seat assignment is the host's job
 // later; for now we just track who is present.
-/** @type {Map<string, { hostId: string|null, players: Map<string, {name:string, seat:number|null}> }>} */
+/** @type {Map<string, { hostId: string|null, players: Map<string, {name:string, seat:number|null, uid:string}> }>} */
 const rooms = new Map();
 
 function roster(code) {
@@ -74,7 +74,11 @@ function roster(code) {
   if (!r) return { host: false, players: [] };
   return {
     host: !!r.hostId,
-    players: [...r.players.entries()].map(([id, p]) => ({ id, name: p.name, seat: p.seat })),
+    // `uid` is the browser's own identity and it is what the HOST keys seats
+    // on. `id` is the socket, which is reissued on every reconnect — keying a
+    // seat on it would give a child who glanced at a notification a brand new
+    // kart. The relay does not care about either; it just carries them.
+    players: [...r.players.entries()].map(([id, p]) => ({ id, uid: p.uid, name: p.name, seat: p.seat })),
   };
 }
 
@@ -92,7 +96,7 @@ const io = new Server(httpServer, {
 
 io.on('connection', (socket) => {
   // Each socket belongs to exactly one room, remembered on socket.data.
-  socket.on('join', ({ room, name, role } = {}, ack) => {
+  socket.on('join', ({ room, name, role, uid } = {}, ack) => {
     if (!room || typeof room !== 'string') { ack?.({ ok: false, error: 'no room' }); return; }
     room = room.toUpperCase().slice(0, 8);
     let r = rooms.get(room);
@@ -101,11 +105,14 @@ io.on('connection', (socket) => {
     socket.join(room);
     socket.data.room = room;
     socket.data.role = role === 'host' ? 'host' : 'player';
+    socket.data.uid = String(uid || socket.id).slice(0, 32);
 
     if (socket.data.role === 'host') {
       r.hostId = socket.id;
     } else {
-      r.players.set(socket.id, { name: String(name || 'RACER').slice(0, 16), seat: null });
+      r.players.set(socket.id, {
+        name: String(name || 'RACER').slice(0, 16), seat: null, uid: socket.data.uid,
+      });
     }
 
     ack?.({ ok: true, youAre: socket.data.role, room, roster: roster(room) });
@@ -137,6 +144,21 @@ io.on('connection', (socket) => {
     if (!r || r.hostId !== socket.id) return;
     socket.to(code).emit('lobby', payload);
   });
+
+  // player -> host : the small control channel that is not an input frame —
+  // ready-up, a name change, "I just reconnected, tell me everything again".
+  // Separate from `input` so the hot path stays a fixed-size binary packet with
+  // nothing to branch on.
+  socket.on('to-host', (payload) => {
+    const code = socket.data.room;
+    const r = code && rooms.get(code);
+    if (!r || !r.hostId) return;
+    io.to(r.hostId).emit('to-host', { from: socket.id, uid: socket.data.uid, ...payload });
+  });
+
+  // Round-trip probe. The lobby shows this so a bad corner of the house is
+  // visible as a number before it is felt as a race.
+  socket.on('ping-probe', (ack) => { if (typeof ack === 'function') ack(); });
 
   socket.on('disconnect', () => {
     const code = socket.data.room;

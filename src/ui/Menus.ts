@@ -146,6 +146,29 @@ export class Menus {
   private localPause = false;
   private localTitle = false;
 
+  // ---------------------------------------------------------------- multiplayer
+  // Four hooks, all optional, all null in a single-player build. `Menus` does
+  // not import anything from `src/net/` — it raises intentions and something
+  // else decides what they mean. See `main.ts` for where they are tied on.
+
+  /** Open the lobby. Wired to the title screen's Multiplayer button. */
+  onMultiplayer: (() => void) | null = null;
+  /**
+   * True while the lobby overlay owns the frame. Exactly the same relationship
+   * the controls screen has, and it exists for the same reason: a confirm that
+   * reaches this file while another screen is up starts a race behind it.
+   */
+  isLobbyOpen: (() => boolean) | null = null;
+  /**
+   * "Race again", in a networked race. Returns true if the network took the
+   * decision — only the host may restart a race everyone else is in, and a
+   * client pressing it locally would start a private race against the AI while
+   * its friends carried on without it.
+   */
+  onNetRestart: (() => boolean) | null = null;
+  /** Leaving to the title screen ends this machine's part in a network race. */
+  onNetQuit: (() => void) | null = null;
+
   private selected = 0;
   private cards: HTMLDivElement[] = [];
   private buttons: { pause: HTMLDivElement[]; results: HTMLDivElement[] } = { pause: [], results: [] };
@@ -242,6 +265,15 @@ export class Menus {
     // not one of the four screens, so nothing below it may act on a confirm.
     this.controls.update(ctx);
     if (this.controls.open) {
+      this.tapConfirm = false;
+      this.prevSteer = input.steer;
+      return;
+    }
+
+    // The lobby is the other sibling overlay. While it is up it owns every tap
+    // and every keypress — without this the tap that joins a room also confirms
+    // the title screen underneath it and drops the player into a solo race.
+    if (this.isLobbyOpen?.()) {
       this.tapConfirm = false;
       this.prevSteer = input.steer;
       return;
@@ -386,6 +418,11 @@ export class Menus {
   }
 
   private startRace(ctx: Ctx) {
+    // In a networked race, starting is not this machine's decision to take
+    // alone. The hook returns true when it has handled it — the host has
+    // broadcast a new start to everyone, or a client has been told, politely,
+    // that it does not get to restart a race four other people are in.
+    if (this.onNetRestart?.()) return;
     this.forced = null;
     this.localTitle = false;
     this.selecting = false;
@@ -428,6 +465,11 @@ export class Menus {
     this.titlePrompt = el('div', 'kr-prompt', wrap);
     this.titleGlyphs = el('div', 'kr-glyphs', wrap);
     this.titleHint = el('div', 'kr-hint', wrap);
+    const mbtn = el('div', 'kr-btn kr-btn-controls', wrap, 'Multiplayer');
+    // `stopPropagation` for the same reason the Controls button needs it: the
+    // root's tap-anywhere-confirm listener would otherwise read this tap as
+    // "start a race" and do both.
+    mbtn.onclick = (e) => { e.stopPropagation(); this.onMultiplayer?.(); };
     const cbtn = el('div', 'kr-btn kr-btn-controls', wrap, 'Controls');
     cbtn.onclick = (e) => { e.stopPropagation(); this.controls.show(); };
     this.syncTouchCopy(false);
@@ -570,6 +612,7 @@ export class Menus {
       this.forced = null;
       this.localTitle = true;
       this.selecting = false;
+      this.onNetQuit?.();
       this.ctx.race.reset();
     };
     this.buttons.pause = [resume, ctrl, restart, quit];
@@ -591,7 +634,13 @@ export class Menus {
     const again = el('div', 'kr-btn', list, 'Race again');
     again.onclick = () => this.startRace(this.ctx);
     const title = el('div', 'kr-btn', list, 'Back to title');
-    title.onclick = () => { this.localTitle = true; this.selecting = false; this.forced = null; this.ctx.race.reset(); };
+    title.onclick = () => {
+      this.localTitle = true;
+      this.selecting = false;
+      this.forced = null;
+      this.onNetQuit?.();
+      this.ctx.race.reset();
+    };
     this.buttons.results = [again, title];
     return s;
   }

@@ -7,7 +7,9 @@ This document is the spec the build codes against. It records the research that 
 to the architecture, the one open decision, the phased plan, and the traps we already
 know about so we don't rediscover them the hard way.
 
-Status: **Phase 1 in progress** (see Plan below). Branch: `multiplayer`.
+Status: **Phases 1–4 built and passing `tools/net-race.mjs`; never yet played by a
+human.** Branch: `multiplayer`. See §10 for exactly what was built, where the build
+deviated from this plan and why, and what has not been tested.
 
 ---
 
@@ -118,17 +120,17 @@ live on the VPS while a laptop hosts — both work.
 
 ## 4. Plan (phased, each phase is playable-ish)
 
-1. **Prove the pipe.** Stand up the socket.io relay + a room. Two devices connect, join a
-   room, and each sees a second kart *move* from the other's inputs (ugly, no interpolation
-   yet). This milestone de-risks everything. ← **current phase**
-2. **Shared race.** Host runs all karts; human seats are driven by received inputs, AI fills
-   the rest. Clients interpolate remote karts and predict their own. It's now a real race.
-3. **Fair race.** Move items, projectiles, collisions, lap/finish order to host arbitration.
-4. **Lobby & robustness.** Room-code + QR join screen, name entry, ready-up, synchronized
-   countdown (`startAt` timestamp), and drop handling (grace window → rejoin by code, else
-   convert the kart to AI/ghost).
+1. ~~**Prove the pipe.**~~ **Done.** The socket.io relay, rooms, and a verified
+   input/snapshot round-trip (`server/test-pipe.mjs`).
+2. ~~**Shared race.**~~ **Done.** Host runs all karts; human seats are driven by received
+   inputs, AI fills the rest. Clients interpolate remote karts and simulate their own.
+3. ~~**Fair race.**~~ **Done for what it decides**, see §10.3. Items, hits, laps, placement
+   and the finishing order are the host's alone; clients replay the visuals.
+4. ~~**Lobby & robustness.**~~ **Done.** Room code, QR join, name entry, ready-up,
+   synchronised start, reconnect and a seat held through a drop.
 5. **Characters.** Per-kid name + colour + livery, photo on the number-plate / podium / HUD.
-   The easy, fun layer — deliberately last, on top of a working game.
+   Not started — the easy, fun layer, deliberately last, on top of a working game. Names and
+   per-racer colours already exist in the lobby, so this is the podium and the number-plate.
 
 Rough effort: on the order of a couple of weeks of focused work to genuinely fun.
 
@@ -186,3 +188,75 @@ fix-your-timestep); Valve *Source Multiplayer Networking*.
 Tooling: socket.io, `ws`, Colyseus, geckos.io, Nakama docs/repos.
 Prior art: `colyseus/react-racing-game`, geckos.io three.js-forum build logs, `jeeanribeiro/tag-game`.
 Mobile: WebKit bugs 228296 / 247943, MDN Screen Wake Lock, MDN Pointer/mobile touch controls.
+
+---
+
+## 10. What was actually built
+
+Phases 1–4 are in. `tools/net-race.mjs` runs a real two-browser race and passes. **No child
+has played it yet** — everything below is measured by harness, not by anyone having fun.
+
+### 10.1 The map
+
+| file | what it is |
+|---|---|
+| `src/net/Protocol.ts` | every byte on the wire, defined once |
+| `src/net/Net.ts` | the session — host and client, one `System`, ticked after `Race` |
+| `src/ui/LobbyScreen.ts`, `src/ui/lobby.css` | room code, QR, who's in, ready-up |
+| `server/relay.mjs` | unchanged in shape; gained `uid`, `to-host` and a ping probe |
+| `tools/net-race.mjs` | two browsers, one race, four questions |
+| `tools/lobby-shots.mjs` | clicks through the join flow and photographs it |
+
+The race director's whole footprint is three flags and one callback (`netMode`,
+`netClient`, `netCommandFor`, `netSetState`). A remote player's controls enter the simulation
+at the exact line the local player's do. Nothing in `src/game/` or `src/kart/` imports
+anything from `src/net/`.
+
+### 10.2 Where the build deviates from the plan above
+
+**A synchronised start uses a DELAY, not a timestamp.** §6 called for broadcasting a shared
+`startAt`. That imports a clock-synchronisation problem to solve a LAN-latency one — phones do
+not agree on the time of day, and being 400 ms out on a wall clock is normal. The host instead
+sends `startIn` and *everyone including the host* starts that many milliseconds after
+receiving it. The spread between two devices is then one LAN hop, ~2–5 ms.
+
+**Clients do not simulate the karts they do not own.** §3.4 kept local prediction of your own
+kart (this was built, with soft correction) and said nothing definite about the other seven.
+They are now *posed*, not simulated: `Kart.netPose` writes position, heading, wheel spin and
+the driver rig directly from interpolated snapshots. Two devices integrating a
+non-deterministic chassis diverge within a corner, so simulating them would have produced a
+visible correction on every packet — and eight chassis of physics a phone does not need to
+run. Measured path error against the host's own recorded trajectory: **0.02–0.32 m**.
+
+**Item presses are sent as a running total, not a flag.** An edge cannot survive a lossy
+sample: a press landing between two sends is simply gone and the shell never fires. The host
+subtracts what it has already fired.
+
+**`accelAuto` crosses the wire.** It has to. Auto-accelerate is on by default on touch and the
+rocket start reads a held throttle as a decision — without that bit the host would burn every
+phone out on the line, every race. This is the same bug the single-player game already fixed
+once; it would have come straight back in multiplayer.
+
+### 10.3 What is host-authoritative, and what is only drawn
+
+Decided by the host, and true: item rolls and pickups, who was hit by what, stun/boost/star,
+laps, placement, the finishing order, respawns, and the flag.
+
+Drawn locally and *not* a decision: the shell itself. When the host reports a kart fired
+something, the client spawns a cosmetic projectile that flies under local physics — because a
+kart spinning out for no visible reason reads as a bug. Whatever that local shell appears to
+hit changes nothing; the real consequence arrives as state in the same snapshot stream.
+
+### 10.4 Known gaps
+
+- **A remote kart mid-drift slides flat.** The chassis roll and crab angle are derived from
+  forces a posed kart is not computing. Cosmetic, on someone else's kart, and it costs ten
+  more floats a tick to fix properly.
+- **A backwards throw replays forwards** on other machines. The bus event does not carry the
+  direction; the wire would need one more bit.
+- **Your own item icon can flicker** for up to 300 ms after you fire, when the host is still
+  reporting it as held. Suppressed by a timer, not by a fix.
+- **Wake lock does not work over plain LAN http** — it needs a secure context. This is the
+  most likely thing to spoil an actual session; see `server/README.md`.
+- **Untested:** a phone as the host, reconnect after a real drop, pausing mid-race, and more
+  than two machines at once. All are implemented; none has been run.

@@ -8,6 +8,9 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
+    // `qrcode-generator` is a CommonJS module that uses `export =`. The bundler
+    // gives it a default export at build time; this lets the type checker agree.
+    "allowSyntheticDefaultImports": true,
     "isolatedModules": true,
     "noEmit": true,
     "strict": false,

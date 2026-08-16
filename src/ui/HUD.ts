@@ -148,6 +148,17 @@ export class HUD implements System {
   private minimap!: Minimap;
   private menus!: Menus;
 
+  /**
+   * The menu screens, and the DOM layer they live in.
+   *
+   * Exposed for one reason: the multiplayer lobby is a sibling overlay of the
+   * menus (like the controls screen) and it is built in `main.ts`, where the
+   * network session exists. It needs the same parent element and it needs to
+   * tie its hooks onto `Menus`. Nothing else should reach in here.
+   */
+  get menu(): Menus { return this.menus; }
+  get layer(): HTMLDivElement { return this.root; }
+
   // atmospherics
   private vig!: HTMLDivElement;
   private boostEl!: HTMLDivElement;

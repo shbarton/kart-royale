@@ -678,6 +678,23 @@ function smooth(rate: number, dt: number) {
   return 1 - Math.exp(-rate * dt);
 }
 
+/**
+ * The authoritative pose of one kart, as it arrives from the host.
+ *
+ * Declared here rather than imported from `src/net/` on purpose: the chassis
+ * must not know that networking exists. `Snapshot`'s per-kart record is a
+ * structural superset of this, so the net layer hands one straight in.
+ */
+export interface NetPose {
+  x: number; y: number; z: number;
+  yaw: number;
+  /** chassis up-vector, X and Z; Y is recovered as the unit remainder */
+  upx: number; upz: number;
+  vx: number; vy: number; vz: number;
+  forwardSpeed: number;
+  steerAngle: number;
+}
+
 export class Kart implements IKart {
   readonly object = new THREE.Group();
   /** child of `object`; carries the trick rotation only */
@@ -1136,6 +1153,134 @@ export class Kart implements IKart {
     this.visual.rotation.set(0, 0, 0);
     this.visual.scale.set(1, 1, 1);
     this.applyWheelVisuals(0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // the network pose
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Put this kart exactly where the host says it is, WITHOUT simulating it.
+   *
+   * In a multiplayer race one machine is the authority and everyone else is
+   * watching (see `docs/multiplayer/DESIGN.md`). A watching client must not run
+   * physics for the karts it does not own: two devices integrating a
+   * non-deterministic chassis from the same start diverge within a corner, and
+   * then every snapshot arrives as a correction the player can see. So the
+   * other seven karts are not simulated at all on a client — they are posed,
+   * from a position the client interpolates between the two most recent
+   * snapshots it holds.
+   *
+   * `step` is therefore never called for them, which is also why this has to
+   * drive the visuals by hand: wheel spin, steering lock and the driver rig all
+   * live inside the step it is replacing. What it deliberately does NOT
+   * reproduce is the drift pose — the chassis roll and the crab angle are
+   * derived from forces this kart is no longer computing. A remote kart mid-
+   * slide therefore slides flat. That is a cosmetic gap on someone else's kart
+   * and it is the correct trade against shipping ten more floats a tick.
+   *
+   * `dt` is only used to advance the wheels and the driver; nothing here
+   * integrates.
+   */
+  netPose(p: NetPose, dt: number) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return;
+    this.position.set(p.x, p.y, p.z);
+    this.velocity.set(p.vx, p.vy, p.vz);
+    this.yaw = p.yaw;
+    this.yawRate = 0;
+    this.forwardSpeed = p.forwardSpeed;
+    this.steerAngle = p.steerAngle;
+
+    // The host sends the chassis up-vector as (x, z) and we recover y, because
+    // it is a unit vector and the third component is not information. Guard the
+    // degenerate case the same way `updateBasis` does — a kart lying on its
+    // side would otherwise put a zero-length basis into `quaternion`, which is
+    // permanent and silent.
+    const sq = 1 - p.upx * p.upx - p.upz * p.upz;
+    this.up.set(p.upx, sq > 0 ? Math.sqrt(sq) : 0, p.upz);
+    if (!(this.up.lengthSq() > 1e-6) || !(this.up.y > 0.15)) this.up.set(0, 1, 0);
+    this.up.normalize();
+    this.buildBasis();
+
+    this.object.position.copy(this.position);
+    this.object.quaternion.copy(this.quaternion);
+
+    // Roll the wheels at the speed the kart is actually doing. Without this the
+    // remote karts skate across the circuit on four locked tyres, which reads as
+    // broken from a long way further away than it sounds.
+    const rate = this.forwardSpeed / DEFAULT_SUSPENSION.wheelRadius;
+    for (const w of this.suspension.wheels) w.spinRate = rate;
+    this.applyWheelVisuals(dt);
+    this.applyDriverRig(dt);
+  }
+
+  /**
+   * Nudge the LOCAL player's kart toward the host's version of it.
+   *
+   * Your own kart is simulated locally so that steering is instant — on a
+   * phone, waiting for the host to answer before the wheels turn is the one
+   * latency the player feels directly. That prediction drifts from the
+   * authority, and this is what pulls it back.
+   *
+   * Two regimes, and the split matters:
+   *
+   * - **Small error — blend.** A few centimetres a tick, applied over ~5
+   *   frames. The player cannot see it and the two copies converge.
+   * - **Large error — snap.** Past `SNAP` metres the local copy is not drifting,
+   *   it is WRONG: hit by a shell you never saw, respawned by the host's
+   *   marshals, or freshly reconnected. Blending a 20 m error looks like the
+   *   kart being dragged and takes a second to arrive, during which you are
+   *   driving a kart that is not where you are. Teleport instead.
+   */
+  netCorrect(p: NetPose, blend: number) {
+    if (!Number.isFinite(p.x)) return;
+    const SNAP = 4;
+    const dx = p.x - this.position.x;
+    const dy = p.y - this.position.y;
+    const dz = p.z - this.position.z;
+    if (dx * dx + dy * dy + dz * dz > SNAP * SNAP) {
+      this.position.set(p.x, p.y, p.z);
+      this.velocity.set(p.vx, p.vy, p.vz);
+      this.yaw = p.yaw;
+      this.yawRate = 0;
+      this.forwardSpeed = p.forwardSpeed;
+      this.buildBasis();
+      this.object.position.copy(this.position);
+      this.object.quaternion.copy(this.quaternion);
+      return;
+    }
+    const b = blend < 0 ? 0 : blend > 1 ? 1 : blend;
+    this.position.x += dx * b;
+    this.position.y += dy * b;
+    this.position.z += dz * b;
+    this.velocity.x += (p.vx - this.velocity.x) * b;
+    this.velocity.y += (p.vy - this.velocity.y) * b;
+    this.velocity.z += (p.vz - this.velocity.z) * b;
+    // Shortest way round: a heading blended the long way spins the kart through
+    // a full turn to correct a couple of degrees across the -pi/pi seam.
+    let dyaw = (p.yaw - this.yaw) % (Math.PI * 2);
+    if (dyaw > Math.PI) dyaw -= Math.PI * 2;
+    else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    this.yaw += dyaw * b;
+    this.object.position.copy(this.position);
+  }
+
+  /**
+   * The tail of `updateBasis` — heading and orientation from `yaw` and `up`,
+   * with no smoothing toward the ground normal. Split out because the network
+   * path already HAS the up-vector it wants and must not lerp toward a
+   * suspension it is not running.
+   */
+  private buildBasis() {
+    _fwdFlat.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    _basisR.crossVectors(this.up, _fwdFlat);
+    if (_basisR.lengthSq() < 1e-8) _basisR.set(1, 0, 0);
+    _basisR.normalize();
+    _basisF.crossVectors(_basisR, this.up).normalize();
+    this.right.copy(_basisR);
+    this.forward.copy(_basisF);
+    _mat.makeBasis(_basisR, this.up, _basisF);
+    this.quaternion.setFromRotationMatrix(_mat);
   }
 
   // ---------------------------------------------------------------------------
@@ -1658,15 +1803,7 @@ export class Kart implements IKart {
     if (!(this.up.lengthSq() > 1e-6) || !(this.up.y > 0.15)) this.up.set(0, 1, 0);
     this.up.normalize();
 
-    _fwdFlat.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    _basisR.crossVectors(this.up, _fwdFlat);
-    if (_basisR.lengthSq() < 1e-8) _basisR.set(1, 0, 0);
-    _basisR.normalize();
-    _basisF.crossVectors(_basisR, this.up).normalize();
-    this.right.copy(_basisR);
-    this.forward.copy(_basisF);
-    _mat.makeBasis(_basisR, this.up, _basisF);
-    this.quaternion.setFromRotationMatrix(_mat);
+    this.buildBasis();
   }
 
   /** Last line of defence: a single NaN would take the whole scene with it. */

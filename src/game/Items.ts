@@ -787,6 +787,53 @@ export class Items implements IItems {
     return this.proj.carriedKind(s.carried, kart.id);
   }
 
+  /**
+   * Client only: this machine does not decide who gets what.
+   *
+   * Item boxes still go down when a kart drives through one, because that is a
+   * local visual, but nothing is rolled and nothing is dealt — the item slot is
+   * written from the host's snapshot instead (`netHold`), and items fired by
+   * other players are replayed from host events (`netUse`). See
+   * `docs/multiplayer/DESIGN.md` §3.6: everything contested is decided in one
+   * place, and "who won which shell" is the most contested thing in the game.
+   */
+  netDisplayOnly = false;
+
+  /**
+   * Client only: adopt the host's view of what a kart is holding.
+   *
+   * `arm` is deliberately untouched. It is the roulette — a local animation
+   * that is already spinning by the time this arrives, and re-arming it every
+   * snapshot would leave it spinning for ever.
+   */
+  netHold(kart: IKart, kind: ItemKind, count: number) {
+    const s = this.slot(kart);
+    if (s.carried >= 0) return;         // towing something; the shield owns the slot
+    s.kind = kind;
+    s.count = kind === ItemKind.None ? 0 : count;
+  }
+
+  /**
+   * Client only: play back an item the HOST says was fired.
+   *
+   * The shell has to exist on this screen or the race is unreadable — a kart
+   * spinning out for no visible reason reads as a bug, not as a hit. The slot
+   * is force-filled first because the snapshot that reports the firing also
+   * reports the item as spent, so by the time we get here the client believes
+   * that kart is holding nothing.
+   *
+   * What this spawns is COSMETIC. It flies under local physics and whatever it
+   * hits here is not a decision — every real consequence (the spin, the boost,
+   * the lost lap) arrives as authoritative state in the same snapshot stream.
+   */
+  netUse(kart: IKart, kind: ItemKind, backwards: boolean) {
+    const s = this.slot(kart);
+    s.kind = kind;
+    s.count = Math.max(1, s.count);
+    s.arm = 0;
+    this.use(kart, backwards);
+  }
+
   give(kart: IKart, kind: ItemKind, count = 1) {
     const s = this.slot(kart);
     s.kind = kind;
@@ -1025,7 +1072,13 @@ export class Items implements IItems {
           if (_v.lengthSq() > BOX_PICKUP_R * BOX_PICKUP_R) continue;
           const s = this.slot(k);
           if (s.kind !== ItemKind.None || s.carried >= 0) continue;
-          this.pickup(k);
+          // A client takes the box down for the look of it, and stops there.
+          // WHICH item this kart just won is the host's decision and lands in
+          // the next snapshot ~40 ms later; rolling one here as well would deal
+          // a second, different item and flash the wrong glyph on the HUD until
+          // the authority contradicted it.
+          if (this.netDisplayOnly) this.ctx.bus.emit({ type: 'item-pickup', kart: k });
+          else this.pickup(k);
           b.down = BOX_RESPAWN;
           b.scale = 0;
           break;

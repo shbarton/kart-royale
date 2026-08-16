@@ -1,0 +1,300 @@
+/* ==========================================================================
+   Kart Royale — the multiplayer lobby.
+
+   Sits inside `.kr`, so every ink, the gold and the display face are inherited
+   from ui.css rather than re-invented here. Everything below is layout.
+
+   THE CONSTRAINT THAT SHAPES THIS FILE: a landscape phone is ~390 CSS px tall
+   and `touch-action: none` on `html` means there is no scrolling to fall back
+   on — its EFFECT intersects down the tree, so a child cannot re-enable
+   panning however it is styled. Every pane therefore fits in that height or it
+   does not ship. The QR panel is the one thing allowed to disappear on a small
+   screen, because the only machine that shows a QR is the host, and the host
+   is a laptop or a television.
+   ========================================================================== */
+
+.kr-lobby {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(1.03);
+  transition: opacity 0.32s ease, transform 0.42s ease, visibility 0s linear 0.4s;
+  z-index: 30;                 /* over .kr-screens, under nothing */
+}
+
+.kr-lobby.on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: scale(1);
+  transition: opacity 0.3s ease, transform 0.45s ease, visibility 0s;
+}
+
+/* The scrim has to be strong in the MIDDLE, which is the opposite of the
+   instinct that produced the first draft: a radial that is light at the centre
+   and dark at the edges looks right over a title card and fails over the thing
+   this screen actually sits on, which is a sunlit circuit with white kerbs and
+   eight coloured karts on it. Measured on a phone, the room code and the player
+   rows were unreadable against the road. Every value below is floor-first — a
+   flat 0.72 base that nothing shows through, with the radial only deepening it
+   further out. */
+.kr-lobby::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(14, 8, 4, 0.72), rgba(14, 8, 4, 0.72)),
+    radial-gradient(ellipse 90% 80% at 50% 42%, rgba(26, 15, 9, 0.35), rgba(10, 6, 3, 0.92) 78%);
+  backdrop-filter: blur(10px) saturate(0.7);
+}
+
+/* --- panes ---------------------------------------------------------------- */
+
+.kr-lobby-pane {
+  position: relative;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.6vmin;
+  width: min(92vw, 860px);
+  max-height: 92vh;
+  padding: 3vmin 3.4vmin;
+}
+.kr-lobby-pane.on { display: flex; }
+
+.kr-lobby-title {
+  font-family: var(--fd);
+  font-weight: 900;
+  font-size: clamp(22px, 4.6vmin, 52px);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-shadow: 0 0.3vmin 0 var(--ink-c), 0 0.9vmin 2.4vmin rgba(20, 10, 4, 0.7);
+}
+
+.kr-lobby-blurb {
+  max-width: 46ch;
+  text-align: center;
+  font-size: clamp(11px, 1.8vmin, 18px);
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--dim);
+}
+
+/* --- text fields ---------------------------------------------------------- */
+
+.kr-lobby-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6vmin;
+  align-items: center;
+}
+.kr-lobby-field > span {
+  font-size: clamp(9px, 1.3vmin, 14px);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(248, 242, 230, 0.5);
+}
+
+.kr-lobby-input {
+  pointer-events: auto;
+  width: min(72vw, 320px);
+  padding: 0.5em 0.8em;
+  border-radius: 0.7em;
+  border: 1px solid rgba(255, 240, 214, 0.24);
+  background: rgba(20, 11, 6, 0.72);
+  color: var(--paper);
+  font-family: var(--fd);
+  font-size: clamp(15px, 2.6vmin, 26px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-align: center;
+  outline: none;
+}
+.kr-lobby-input:focus {
+  border-color: rgba(255, 207, 107, 0.7);
+  box-shadow: 0 0 0 0.3vmin rgba(255, 207, 107, 0.16);
+}
+
+/* The room code is read across a room and typed with a thumb. */
+.kr-lobby-code-in {
+  font-size: clamp(24px, 5vmin, 44px);
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+}
+
+/* --- the room code, big --------------------------------------------------- */
+
+.kr-lobby-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4vmin;
+  width: 100%;
+}
+
+.kr-lobby-codelabel {
+  font-size: clamp(9px, 1.3vmin, 14px);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(248, 242, 230, 0.5);
+  text-align: center;
+}
+
+.kr-lobby-code {
+  font-family: var(--fd);
+  font-weight: 900;
+  font-size: clamp(44px, 11vmin, 128px);
+  line-height: 1.02;
+  letter-spacing: 0.14em;
+  text-indent: 0.14em;
+  color: var(--paper);
+  text-shadow: 0 0.4vmin 0 var(--ink-c), 0 1.2vmin 3vmin rgba(20, 10, 4, 0.8);
+}
+
+/* --- QR ------------------------------------------------------------------- */
+
+.kr-lobby-qrwrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9vmin;
+}
+
+/* One grid cell per module, white quiet zone included via the padding. A
+   camera needs the light field around the code as much as the code. */
+.kr-lobby-qr {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 29), 1fr);
+  grid-template-rows: repeat(var(--n, 29), 1fr);
+  width: clamp(96px, 22vmin, 200px);
+  aspect-ratio: 1;
+  padding: 6px;
+  border-radius: 0.6em;
+  background: #fff;
+  box-shadow: 0 0.8vmin 2.4vmin rgba(20, 10, 4, 0.6);
+}
+.kr-lobby-qr i { background: #101010; }
+
+.kr-lobby-url {
+  font-size: clamp(10px, 1.5vmin, 15px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(248, 242, 230, 0.66);
+  word-break: break-all;
+  text-align: center;
+  max-width: 30ch;
+}
+
+.kr-lobby-warn:not(:empty) {
+  max-width: 52ch;
+  text-align: center;
+  font-size: clamp(10px, 1.5vmin, 15px);
+  font-weight: 700;
+  line-height: 1.4;
+  color: #ffb27a;
+}
+
+/* --- who is in ------------------------------------------------------------ */
+
+.kr-lobby-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5vmin;
+  width: min(88vw, 520px);
+}
+
+.kr-lobby-row {
+  --c: #ffcf6b;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 1.2vmin;
+  padding: 0.55em 0.9em;
+  border-radius: 0.6em;
+  /* Opaque base FIRST, racer colour washed over it. A row that is only a
+     translucent tint lets the circuit through and the name sits on a kerb. */
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--c) 30%, transparent), transparent 62%),
+    linear-gradient(rgba(30, 18, 10, 0.92), rgba(22, 13, 7, 0.92));
+  border: 1px solid rgba(255, 240, 214, 0.14);
+}
+.kr-lobby-row.gone { opacity: 0.45; }
+
+.kr-lobby-dot {
+  width: 1.6vmin;
+  min-width: 9px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 1.4vmin color-mix(in srgb, var(--c) 60%, transparent);
+}
+
+.kr-lobby-name {
+  font-family: var(--fd);
+  font-weight: 800;
+  font-size: clamp(13px, 2.1vmin, 22px);
+  color: var(--paper);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.kr-lobby-kart {
+  font-size: clamp(10px, 1.5vmin, 15px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(248, 242, 230, 0.55);
+}
+
+.kr-lobby-tag:not(:empty) {
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  font-size: clamp(8px, 1.2vmin, 12px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--ink-2);
+  background: var(--gold);
+}
+
+.kr-lobby-status,
+.kr-lobby-ping {
+  font-size: clamp(10px, 1.5vmin, 15px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(248, 242, 230, 0.78);
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(10, 5, 2, 0.9);
+}
+.kr-lobby-ping { opacity: 0.55; }
+
+/* --- actions -------------------------------------------------------------- */
+
+.kr-lobby-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1.4vmin;
+  margin-top: 0.6vmin;
+}
+
+.kr-lobby-quiet {
+  opacity: 0.7;
+  font-size: clamp(11px, 1.6vmin, 16px);
+}
+
+/* Landscape phone: the code and the list are the whole screen. The QR is the
+   host's affordance and the host is not on a phone. */
+@media (max-height: 460px) {
+  .kr-lobby-pane { gap: 1vmin; padding: 1.6vmin 2.4vmin; }
+  .kr-lobby-qrwrap { display: none; }
+  .kr-lobby-blurb { display: none; }
+  .kr-lobby-row { padding: 0.35em 0.8em; }
+}

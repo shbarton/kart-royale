@@ -20,6 +20,8 @@ import { Race } from './game/Race';
 import { ChaseCamera } from './game/Camera';
 import { HUD } from './ui/HUD';
 import { Audio } from './audio/Audio';
+import { Net } from './net/Net';
+import { LobbyScreen } from './ui/LobbyScreen';
 
 const parent = document.getElementById('app')!;
 
@@ -79,6 +81,7 @@ const scenery = new Scenery();
 const effects = new Effects();
 const items = new Items();
 const race = new Race();
+const net = new Net();
 const camera = new ChaseCamera();
 const hud = new HUD();
 const audio = new Audio();
@@ -139,17 +142,24 @@ const ctx: Ctx = {
 //   effects / camera / hud / audio — all consume the karts.
 //   drawBudget — LOD and shadow culling, measured from the posed camera, so it
 //               must be last: its lateUpdate has to run after the chase rig's.
+//   net       — multiplayer. Placed immediately after `race` so that its update
+//               runs on a world the director has already stepped: on a host
+//               that is what gets published, and on a client that is when the
+//               other seven karts are posed — before the chase camera's
+//               lateUpdate reads any of their positions. Inert in a
+//               single-player race; it does nothing at all until somebody opens
+//               the lobby.
 const systems: System[] = [
-  pipeline, input, sky, materials, track, scenery, race, items, effects, camera, hud, audio,
+  pipeline, input, sky, materials, track, scenery, race, net, items, effects, camera, hud, audio,
   drawBudget,
 ];
 
 /** Human-readable names for the boot progress readout, indexed with `systems`. */
 const SYSTEM_LABELS = [
   'starting renderer', 'reading controls', 'raising the sun', 'mixing materials',
-  'laying the circuit', 'dressing the bay', 'rolling out the grid', 'loading item boxes',
-  'lighting the effects', 'mounting the camera', 'drawing the hud', 'tuning the engines',
-  'balancing the frame',
+  'laying the circuit', 'dressing the bay', 'rolling out the grid', 'opening the radio',
+  'loading item boxes', 'lighting the effects', 'mounting the camera', 'drawing the hud',
+  'tuning the engines', 'balancing the frame',
 ];
 
 function bootProgress(frac: number, label: string) {
@@ -168,6 +178,25 @@ async function boot() {
     await new Promise((r) => requestAnimationFrame(r));
     await systems[i].init?.(ctx);
   }
+  // The lobby is built here rather than as a `System` because it needs two
+  // things that only exist once the systems are up: the HUD's DOM layer to live
+  // in, and `Menus` to hang its hooks on. It is a sibling overlay of the menu
+  // screens, exactly like the controls screen.
+  const lobby = new LobbyScreen(hud.layer, net);
+  lobby.init(ctx);
+  hud.menu.onMultiplayer = () => lobby.show();
+  hud.menu.isLobbyOpen = () => lobby.open;
+  hud.menu.onNetQuit = () => net.leave();
+  hud.menu.onNetRestart = () => {
+    if (!net.active) return false;              // single player: nothing to do
+    // The host restarts the race for everybody. A client asking to race again
+    // is asking the wrong machine, so it is shown the lobby instead of quietly
+    // starting a solo race while its friends carry on without it.
+    if (net.isHost) net.startRace();
+    else lobby.show();
+    return true;
+  };
+
   frameWatch.init(ctx);
   diagnostics.init(ctx);
   installFeel();
@@ -1048,6 +1077,10 @@ boot().catch((err) => {
 
 // Expose for the screenshot harness / debugging.
 (window as any).__ctx = ctx;
+// The multiplayer session. `tools/net-race.mjs` drives a whole two-machine race
+// through this — joining a room is otherwise several taps into a menu, and a
+// harness that cannot start a race cannot test one.
+(window as any).__net = net;
 // tools/perf.mjs turns this off to measure the un-LODed field for a before/after.
 (window as any).__drawBudget = drawBudget;
 (window as any).__camRig = camera; // TEMP-PROBE

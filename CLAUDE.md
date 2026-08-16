@@ -45,6 +45,13 @@ Rough ownership, one concern per directory:
 | `src/ui/` | HUD, menus, minimap |
 | `src/audio/` | synthesis, music, engine |
 | `src/core/` | input, settings, diagnostics, prewarm, event bus |
+| `src/net/` | multiplayer: the wire protocol, and the host/client session |
+
+`src/net/` is one-way. Nothing in `game/`, `kart/` or `ui/` imports from it; the race
+director's entire footprint is three flags and one callback, and a remote player's
+controls enter the simulation at the exact line the local player's do. Keep it that way —
+the moment the chassis knows a network exists, every physics change becomes a netcode
+change. See `docs/multiplayer/DESIGN.md`.
 
 ## Traps that have already cost a round
 
@@ -118,6 +125,8 @@ a question that is genuinely hard to answer by looking.
 | `touch-test.mjs`, `touch-lazy-test.mjs` | Do touch controls mount and steer, including when the browser lies about being a desktop? |
 | `touch-feel.mjs` | Are the touch controls any *good*? Input latency in ms and frames, the histogram of steer values a slow drag actually produces, three-plus-finger integrity under out-of-order releases, control size/reach across six devices, and whether anything triggers a browser gesture. |
 | `autoplay.mjs`, `shot.mjs` | Play a race unattended; capture frames. |
+| `net-race.mjs` | Do two machines actually race each other? Opens two browsers, hosts and joins, drives the client with real key events, then checks the client's karts sit on the host's *recorded path*, that the host received the input, and that both agree on every lap, place and the finishing order. |
+| `lobby-shots.mjs` | Clicks through Multiplayer → host a room → a phone joins by QR link, and photographs each step. The lobby's contrast was set by looking at these: a scrim that looks right over the title card is unreadable over a sunlit circuit. |
 
 Rules learned the hard way:
 
