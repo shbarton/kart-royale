@@ -136,9 +136,11 @@ export class ControlsMenu {
       { value: 'right', label: 'Right' }, { value: 'left', label: 'Left' },
     ], () => this.pad?.prefs.hand, (v) => this.pad?.setHand(v));
 
-    this.seg<boolean>(grid, 'auto', 'Throttle', [
-      { value: true, label: 'Auto' }, { value: false, label: 'Manual' },
-    ], () => this.pad?.auto, (v) => this.pad?.setAuto(v));
+    // NO THROTTLE ROW. Auto-accelerate is permanent on touch — see
+    // `TouchControls.setAuto`. It was an Auto/Manual segment here and a live
+    // chip on the race screen, and both are gone: on a phone you are at full
+    // throttle unless you hold BRAKE, and there is no way to end up in a state
+    // where nothing you press makes the kart move.
 
     this.seg<number>(grid, 'steerAssist', 'Steering help', [
       { value: 0, label: 'Off' }, { value: 0.35, label: 'Light' }, { value: 0.6, label: 'Strong' },

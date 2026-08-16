@@ -297,7 +297,6 @@ export class TouchControls {
   private cluster!: HTMLElement;
   private padsWrap!: HTMLElement;
   private gasBtn!: HTMLElement;
-  private autoChip!: HTMLElement;
   private pauseChip!: HTMLElement;
   private coachEl!: HTMLElement;
   /** public for tools/touch-feel.mjs, which reads the cached hit radii back */
@@ -388,7 +387,6 @@ export class TouchControls {
     this.ghost = root.querySelector('.tc-ghost')!;
     this.cluster = root.querySelector('.tc-cluster')!;
     this.padsWrap = root.querySelector('.tc-pads')!;
-    this.autoChip = root.querySelector('.tc-auto')!;
     this.pauseChip = root.querySelector('.tc-pause')!;
     this.coachEl = root.querySelector('.tc-coach')!;
     this.gasBtn = root.querySelector('[data-btn="gas"]')!;
@@ -406,19 +404,15 @@ export class TouchControls {
     this.bLeft = byId('left');
     this.bRight = byId('right');
 
-    this.autoChip.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.setAuto(!this.auto);
-      this.pulse?.([12]);
-    });
     this.pauseChip.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       this.state.pause = true; // consumed as an edge by Input on the next frame
     });
 
-    this.auto = this.prefs.autoAccel;
+    // NOT read from prefs, and there is no longer a control that writes it.
+    // See `setAuto`.
+    this.auto = true;
     this.state.driftAssist = this.prefs.driftAssist;
     this.state.steerAssist = this.prefs.steerAssist;
     this.state.haptics = this.prefs.haptics;
@@ -503,21 +497,35 @@ export class TouchControls {
     save(this.prefs);
   }
 
-  setAuto(on: boolean) {
-    this.auto = on;
-    this.autoChip.classList.toggle('on', on);
-    this.autoChip.textContent = on ? 'AUTO' : 'MAN';
-    // With auto off the player needs a throttle; with it on that space is dead
-    // weight under the thumb, so the pedal is removed rather than just dimmed.
-    this.gasBtn.style.display = on ? 'none' : '';
-    if (on && this.bGas) {
+  /**
+   * Auto-accelerate is PERMANENT on touch. The argument is ignored.
+   *
+   * There is no gas button on a phone and there is no longer a way to ask for
+   * one: you are at full throttle unless you are holding BRAKE. A pedal you
+   * must hold down for the entire race to go forwards is a thumb spent on
+   * nothing, and the toggle that offered one was a live chip in the top-left
+   * corner of the race screen — one tap from the pause button, and one tap from
+   * a child wondering what it does. Tapping it stopped the kart and put the
+   * recovery ("find the pedal that just appeared") behind exactly the confusion
+   * it had caused. Removed rather than defended.
+   *
+   * The method survives because the touch harnesses call it to pin the mode
+   * before probing, and because `pad.auto` is read in several gates. Both now
+   * describe a constant.
+   */
+  setAuto(_on = true) {
+    this.auto = true;
+    // The pedal stays in the button table — the cluster's spacing is solved
+    // against it and the reach gates measure that solution — but it is never
+    // drawn and `hit()` refuses it while `auto` is true, which is always.
+    this.gasBtn.style.display = 'none';
+    if (this.bGas) {
       this.bGas.pointer = -1;
       this.bGas.tapped = false;
       this.bGas.el.classList.remove('down');
     }
     this.dirty = true;
     this.layout();
-    if (this.prefs.autoAccel !== on) this.commit({ autoAccel: on });
   }
 
   setHand(hand: Hand) {
@@ -753,10 +761,8 @@ export class TouchControls {
 
     // --- chips. TARGET_FLOOR on the short side, always: PAUSE used to be
     // 30 x 20 CSS px (4.7 x 3.1 mm), under even WCAG 2.5.8's 24 x 24.
-    for (const c of [this.autoChip, this.pauseChip]) {
-      c.style.height = `${TARGET_FLOOR}px`;
-      c.style.minWidth = `${TARGET_FLOOR}px`;
-    }
+    this.pauseChip.style.height = `${TARGET_FLOOR}px`;
+    this.pauseChip.style.minWidth = `${TARGET_FLOOR}px`;
 
     // --- the stick's drawn size. Decoupled from the hit radius; see RING_FRAC.
     const ring = this.radius * RING_FRAC;
@@ -1497,7 +1503,6 @@ const MARKUP = `
 
 <div class="tc-top">
   <div class="tc-chip tc-pause" data-btn="pause">II</div>
-  <div class="tc-chip tc-auto on">AUTO</div>
 </div>
 
 <div class="tc-cluster">

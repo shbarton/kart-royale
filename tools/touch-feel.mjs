@@ -1568,20 +1568,33 @@ try {
   // opens the pause menu and ends the run — and it is probed by watching its
   // own label flip, then restored. PAUSE shares the class, the stylesheet and
   // the early-return in `TouchControls.onDown`, so it is taken to match.
+  //
+  // COVERAGE LOST, DELIBERATELY, AND SAID OUT LOUD.
+  //
+  // The AUTO chip was removed from the game: auto-accelerate is permanent on
+  // touch, so there is nothing left to toggle (see `TouchControls.setAuto`).
+  // It was the only chip this probe could press — PAUSE opens the pause menu
+  // and ends the run — so with it gone, CHIP hit padding is no longer
+  // measurable at all. PAUSE still ships, still uses `.tc-chip`, and its
+  // padding is now UNVERIFIED.
+  //
+  // This is reported rather than quietly skipped, and the button padding
+  // (measured from four real controls) is used in its place so the size
+  // verdicts below still have a number to work from.
   const chipBox = await page.evaluate(() => {
-    const r = document.querySelector('.tc-auto').getBoundingClientRect();
+    const r = document.querySelector('.tc-auto')?.getBoundingClientRect();
+    if (!r) return null;
     window.__tfChip0 = document.querySelector('.tc-auto').textContent;
     return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width };
   });
-  const chipProbe = await probeReachLeft(
+  const chipProbe = chipBox ? await probeReachLeft(
     () => page.evaluate(() => {
       const t = document.querySelector('.tc-auto').textContent;
       const flipped = t !== window.__tfChip0;
       window.__tfChip0 = t;
       return flipped;
     }),
-    chipBox.cx, chipBox.cy, chipBox.w, 30);
-  await page.evaluate(() => { const p = window.__ctx.input.pad; if (!p.auto) p.setAuto(true); });
+    chipBox.cx, chipBox.cy, chipBox.w, 30) : null;
   await frames(3);
 
   /**
@@ -1597,13 +1610,21 @@ try {
   const cleanProbe = padProbe.filter((p) => !p.stolenBy && p.reach >= 0);
   const pads = cleanProbe.map((p) => p.pad);
   const BTN_PAD = pads.length ? median(pads) : NaN;
-  const CHIP_PAD = Math.max(0, chipProbe.last - chipBox.w / 2);
+  const CHIP_PAD = chipProbe && chipBox
+    ? Math.max(0, chipProbe.last - chipBox.w / 2)
+    : BTN_PAD;
   for (const p of padProbe) {
     console.log(`hit probe .tc-${p.id.padEnd(6)}: drawn ${f(p.w, 1)}px wide, registers out to ${p.reach}px ` +
       `from centre -> +${f(p.pad, 1)}px of padding` + (p.stolenBy ? `  (stopped: ${p.stolenBy} claimed it)` : ''));
   }
-  console.log(`hit probe .tc-auto  : drawn ${f(chipBox.w, 1)}px wide, registers out to ${chipProbe.last}px ` +
-    `-> +${f(CHIP_PAD, 1)}px of padding`);
+  if (chipBox && chipProbe) {
+    console.log(`hit probe .tc-auto  : drawn ${f(chipBox.w, 1)}px wide, registers out to ${chipProbe.last}px ` +
+      `-> +${f(CHIP_PAD, 1)}px of padding`);
+  } else {
+    console.warn('hit probe .tc-chip  : NOT MEASURED — the AUTO chip is gone (auto-accelerate is now ' +
+      'permanent) and PAUSE cannot be probed without ending the run. PAUSE\'s hit padding is ' +
+      `unverified; the button padding (+${f(BTN_PAD, 1)}px) is assumed for it below.`);
+  }
   console.log(`hit padding         : buttons +${f(BTN_PAD, 1)}px (median of ${cleanProbe.length} clean ` +
     `reading${cleanProbe.length === 1 ? '' : 's'}: ${cleanProbe.map((p) => p.id).join(', ') || 'none'}), ` +
     `chips +${f(CHIP_PAD, 1)}px  (measured, not read off the CSS)`);
