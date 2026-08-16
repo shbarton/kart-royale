@@ -256,6 +256,14 @@ const DRIFT_TIERS = [0.55, 0.95, 1.9];
 const DRIFT_CARRY_TIME = 0.8;
 
 /**
+ * Seconds at the END of a spin-out spent aiming the kart back down the track.
+ *
+ * Long enough to arrive from any angle at the spin's own rate, short enough
+ * that most of the spin is still a spin. See the aiming branch in `substep`.
+ */
+const SPIN_RECOVER = 0.32;
+
+/**
  * ============================================================================
  *  A release that would pay NOTHING is not a release yet
  * ============================================================================
@@ -1733,7 +1741,42 @@ export class Kart implements IKart {
         if (excess > 0) this.yawRate += Math.sign(beta) * Math.min(excess, 0.8) * 45 * h;
       }
     } else {
-      this.yawRate += (this.spinDir * 9 - this.yawRate) * smooth(9, h);
+      // THE SPIN RESOLVES FACING FORWARD.
+      //
+      // Left alone this drives the yaw rate at a flat 9 rad/s for however long
+      // the stun happens to last, and the stuns are all different lengths — a
+      // bolt is 0.65 s, a shell is longer, a burnout is 0.75 s — so where the
+      // kart is pointing when it stops is arbitrary. About a third of the time
+      // that is roughly backwards, and the recovery is then a three-point turn
+      // on a live circuit. With auto-accelerate holding the throttle it is
+      // worse than that: the kart drives off up the track the wrong way, which
+      // is the same failure the countdown burnout bug produced and the reason
+      // that one was so memorable from the sofa.
+      //
+      // So the last `SPIN_RECOVER` seconds of the spin are aimed. The yaw rate
+      // is steered toward whatever would close the gap to the track's own
+      // heading in the time remaining, rather than the angle being snapped at
+      // the end — a heading that teleports reads as a glitch, and the whole
+      // point of a spin is that you watch it happen. It still overshoots and
+      // wobbles a little on the way, which is what makes it look like a driver
+      // catching the car rather than a turntable stopping.
+      const track = this.track;
+      if (track && this.stunTime > 0 && this.stunTime < SPIN_RECOVER) {
+        // Pooled return: read the two numbers out before touching the track again.
+        const s = track.sample(this.t);
+        const wantYaw = Math.atan2(s.tangent.x, s.tangent.z);
+        let d = (wantYaw - this.yaw) % (Math.PI * 2);
+        if (d > Math.PI) d -= Math.PI * 2;
+        else if (d < -Math.PI) d += Math.PI * 2;
+        // The rate that closes `d` in the time left, clamped to the speed the
+        // spin was already turning at so this can never look like a snap.
+        const need = clamp(d / Math.max(this.stunTime, h), -9, 9);
+        // Firmer as the clock runs out, so it actually arrives.
+        const grip = 9 + 14 * (1 - this.stunTime / SPIN_RECOVER);
+        this.yawRate += (need - this.yawRate) * smooth(grip, h);
+      } else {
+        this.yawRate += (this.spinDir * 9 - this.yawRate) * smooth(9, h);
+      }
     }
     this.yawRate = clamp(this.yawRate, -7, 7);
     this.yawRate -= this.yawRate * clamp(1.1 * h, 0, 0.5);
