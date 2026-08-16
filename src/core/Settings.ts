@@ -696,6 +696,38 @@ export function createSettings(): Settings {
         `drawing buffer near ${(budget / 1e6).toFixed(1)} Mpx ` +
         `(${globalThis.innerWidth}x${globalThis.innerHeight} CSS at dpr ${dev.dpr})`);
       s.maxPixelRatio = capped;
+    } else if (ceiling > s.maxPixelRatio + 1e-3 && dev.dpr > s.maxPixelRatio + 1e-3) {
+      // ...AND THE OTHER WAY. The budget is the honest resolution policy —
+      // Mpx is the unit the cost actually scales with, and the Low tier's own
+      // comment says so in as many words. `maxPixelRatio` is a SECOND policy,
+      // flat, and on a small viewport it binds first and silently spends less
+      // than the tier declared it could afford.
+      //
+      // A landscape phone is the case where that bites. Reported as "the car
+      // is super clear, but the road ahead is pretty blurry", which is what
+      // too few pixels looks like: a large near object survives, and the
+      // high-frequency detail at distance is the first thing to go. Measured
+      // at 844x295 CSS on a dpr-3 panel — a phone in landscape once the
+      // browser chrome is off:
+      //
+      //   Medium: budget allows ratio 2.45, the flat cap allowed 1.50.
+      //           0.56 Mpx drawn against a 1.5 Mpx budget, i.e. 25% of the
+      //           pixels the screen can actually show, and less than half the
+      //           tier's own allowance.
+      //
+      // Bounded by the panel's own dpr, because there is nothing to win by
+      // supersampling past what it can display. Nothing wider changes: on a
+      // 1920x1080 desktop the budget binds at 1.03 and this branch is dead.
+      //
+      // Safe against the frame rate by construction — this spends the declared
+      // budget and no more — and the adaptive scaler in `main.ts` is still the
+      // backstop if a device cannot hold it.
+      const raised = Math.min(ceiling, dev.dpr);
+      logPipeline('settings',
+        `pixel ceiling: maxPixelRatio ${s.maxPixelRatio} -> ${raised.toFixed(2)}; the flat cap was ` +
+        `below the ${(budget / 1e6).toFixed(1)} Mpx budget on this viewport ` +
+        `(${globalThis.innerWidth}x${globalThis.innerHeight} CSS at dpr ${dev.dpr})`);
+      s.maxPixelRatio = raised;
     }
   }
 
