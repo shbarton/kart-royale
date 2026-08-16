@@ -2295,3 +2295,43 @@ html[data-touch] .kr .kr-board-row {
 }
 html[data-touch] .kr .kr-board-p { font-size: clamp(11px, 2vmin, 17px); }
 html[data-touch] .kr .kr-board-n { font-size: clamp(9px, 1.5vmin, 13px); letter-spacing: 0.04em; }
+
+/* --- PHONE: THE MINIMAP LEAVES THE SIGHTLINE ------------------------------
+   ART_DIRECTION §7 permits the minimap top-centre or bottom-centre and
+   nothing else, and the note above `.kr-map` says so — it was moved to the
+   top edge and rebuilt as a slim ribbon precisely to obey that while staying
+   out of the way. On a desktop frame that works and it stays exactly where it
+   is.
+
+   On a phone it does not. Top-centre is directly above the road you are
+   driving into, the frame is ~295 CSS px tall, and the plate is the single
+   largest thing on screen after the kart: "move the minimap to the top right,
+   it takes too much of the user's view".
+
+   So on touch the two top-rail readouts SWAP. The map takes the right corner
+   — the bigger object goes where nothing is ever approaching from — and the
+   clock, which is a third its width, takes the centre. The forward sightline
+   ends up carrying the smallest widget in the HUD instead of the biggest.
+
+   Deliberately breaking §7 on touch only, and saying so here rather than
+   quietly editing the rule: the constraint was written for a 16:9 desktop
+   frame, and a landscape phone is not one. */
+html[data-touch] .kr .kr-map {
+  left: auto;
+  right: env(safe-area-inset-right, 0px);
+  transform: none;
+}
+html[data-touch][data-touch-hand="left"] .kr .kr-map {
+  right: auto;
+  left: env(safe-area-inset-left, 0px);
+}
+/* The clock column takes the centre the map vacated. `align-items` has to come
+   with it or the best-lap pill under the clock stays flush-right of a box that
+   is no longer on the right. */
+html[data-touch] .kr .kr-tr {
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+}
+html[data-touch][data-touch-hand="left"] .kr .kr-tr { transform: translateX(-50%); }

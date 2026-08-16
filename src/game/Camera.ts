@@ -125,6 +125,28 @@ const BOOST_SURGE_DIST = 3.0;
 const BOOST_SURGE_HEIGHT = 0.50;
 const BOOST_SURGE_OMEGA = 13;
 const BOOST_SURGE_ZETA = 0.5;   // ~16% overshoot, one visible rebound
+/**
+ * How much of that boost move a PHONE takes — distance and height separately,
+ * because only one of them is the complaint.
+ *
+ * Reported after a session with children on it: "when I use a speed boost the
+ * camera goes down, it's kinda behind the car, and it makes it hard to see
+ * what's in front of me". Which is exactly what the rig is built to do — the
+ * arm comes in 1.25 m (22%) and drops 0.34 m (30% of its 1.15 m height) while
+ * the lens opens to match, and that dolly zoom is the single best speed cue in
+ * the game.
+ *
+ * On a desktop monitor it reads as acceleration. On a phone it reads as losing
+ * sight of the corner you are about to take, because the same 30% drop costs a
+ * far larger share of a 295 px-tall frame and there is much less road left
+ * above the kart to spend.
+ *
+ * So HEIGHT is nearly held (0.25) and DISTANCE keeps half its move: coming in
+ * behind the kart still sells the surge, and it does not take the road with it.
+ * Desktop is untouched — that screen is the host's television.
+ */
+const BOOST_HEIGHT_TOUCH = 0.25;
+const BOOST_DIST_TOUCH = 0.5;
 /** Braking pulls the rig in and down a little: the frame tightens. */
 const BRAKE_DIST = 0.80;
 const BRAKE_HEIGHT = 0.28;
@@ -1125,15 +1147,20 @@ export class ChaseCamera implements System {
       _dir.applyQuaternion(_q);
     }
 
+    // The boost dolly, scaled down on a phone. See BOOST_HEIGHT_TOUCH.
+    const touch = ctx.input.touch;
+    const bDist = touch ? BOOST_DIST_TOUCH : 1;
+    const bHeight = touch ? BOOST_HEIGHT_TOUCH : 1;
+
     let dist = ARM_DIST + feel.armDistSpeed * sp
-      + surge * BOOST_SURGE_DIST
-      - boost * BOOST_DIST
+      + surge * BOOST_SURGE_DIST * bDist
+      - boost * BOOST_DIST * bDist
       - this.brakeAmt * BRAKE_DIST
       + this.driftAmt * DRIFT_DIST
       - this.lookAmt * 1.4;
     let height = ARM_HEIGHT + feel.armHeightSpeed * sp
-      + surge * BOOST_SURGE_HEIGHT
-      - boost * BOOST_HEIGHT
+      + surge * BOOST_SURGE_HEIGHT * bHeight
+      - boost * BOOST_HEIGHT * bHeight
       - this.brakeAmt * BRAKE_HEIGHT
       + this.driftAmt * DRIFT_HEIGHT
       + this.airAmt * AIR_HEIGHT
