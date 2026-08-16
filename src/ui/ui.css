@@ -2269,7 +2269,29 @@ html[data-touch][data-touch-hand="left"] .kr .kr-board-row {
    of it. Kept on desktop, which is the host's big screen and has the room.
 
    THE LAP PLATE SHRINKS. It is read twice a lap. It does not need to be the
-   same size as things read continuously. */
+   same size as things read continuously.
+
+   EVERY RULE BELOW IS TOUCH-ONLY, and that is not caution — it is the note
+   that came back with the second screenshot: "on the desktop version the sizes
+   are fine, but not on mobile". The desktop HUD is also the HOST's screen, a
+   laptop or a television that the whole room reads from across a sofa, and it
+   wants MORE weight, not less. Nothing here may touch it. */
 html[data-touch] .kr .kr-speed { display: none; }
-html[data-touch] .kr .kr-lap { transform: scale(0.78); transform-origin: 0 0; }
+html[data-touch] .kr .kr-lap { transform: scale(0.72); transform-origin: 0 0; }
 html[data-touch][data-touch-hand="left"] .kr .kr-lap { transform-origin: 100% 0; }
+/* The clock is glanced at, and on a 295px-tall landscape phone it was carrying
+   the same weight as the thing you are steering. */
+html[data-touch] .kr .kr-timer { transform: scale(0.74); transform-origin: 100% 0; }
+html[data-touch][data-touch-hand="left"] .kr .kr-timer { transform-origin: 0 0; }
+
+/* The board, on a phone. Four rows at the desktop size is a quarter of the
+   visible height of a landscape phone — measured off the screenshot that
+   prompted this. Tighter type, tighter padding, and the same information. */
+html[data-touch] .kr .kr-board { gap: 0.28vmin; }
+html[data-touch] .kr .kr-board-row {
+  padding: 0.1em 0.62em 0.14em 0.4em;
+  border-left-width: 0.3vmin;
+  gap: 0.5em;
+}
+html[data-touch] .kr .kr-board-p { font-size: clamp(11px, 2vmin, 17px); }
+html[data-touch] .kr .kr-board-n { font-size: clamp(9px, 1.5vmin, 13px); letter-spacing: 0.04em; }

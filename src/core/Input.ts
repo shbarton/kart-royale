@@ -342,8 +342,17 @@ export class Input implements IInput {
    * A real keypress means a real keyboard, so the on-screen pad is clutter —
    * unless a finger has already used it, in which case this is a tablet with a
    * keyboard attached and taking the controls away mid-race would be worse.
+   *
+   * ...and unless the keypress is somebody TYPING, which is the case that
+   * shipped a phone with no steering on it. The multiplayer lobby asks every
+   * player to enter a name; on a phone that raises the on-screen keyboard, and
+   * every letter of "Lia" arrived here as evidence of a hardware keyboard. The
+   * pad was unmounted before the race even started and never came back — no
+   * stick, no drift, no item button, and the HUD reverted to its desktop
+   * layout, because `html[data-touch]` had gone with it.
    */
-  private onFirstKey = () => {
+  private onFirstKey = (e: KeyboardEvent) => {
+    if (typingInto(e)) return;
     if (this.touch && !this.padUsed) {
       this.touch = false;
       this.pad.unmount();
@@ -379,6 +388,8 @@ export class Input implements IInput {
   }
 
   private onDown = (e: KeyboardEvent) => {
+    // Somebody is typing, not driving. See `typingInto`.
+    if (typingInto(e)) return;
     if (!e.repeat) this.latched.add(e.code);
     this.keys.add(e.code);
     // Space and the arrows scroll the page; the game owns them.
@@ -793,6 +804,25 @@ function clamp01(v: number) {
 // Keys the browser would otherwise scroll the page with. `Enter` is
 // deliberately *not* here: it is the item key, but swallowing it would also
 // stop a focused menu button from activating.
+/**
+ * Is this keystroke aimed at a text field rather than at the game?
+ *
+ * Every keyboard listener in this file has to ask, because the game owns keys
+ * that are also LETTERS. Without the guard, entering a name in the multiplayer
+ * lobby drives the kart — and worse, `SWALLOW` calls `preventDefault` on Space,
+ * so it was not possible to put a space in your own name.
+ *
+ * `isContentEditable` is in here for the same reason a `<select>` is: this has
+ * to be about whether the keystroke has somewhere else to go, not about a list
+ * of tags someone remembered on the day.
+ */
+function typingInto(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  if (!t || !t.tagName) return false;
+  const tag = t.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable === true;
+}
+
 const SWALLOW = new Set([
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
 ]);

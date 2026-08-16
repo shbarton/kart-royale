@@ -340,7 +340,14 @@ export class Net implements System {
   racerNames(): Map<number, string> {
     const out = new Map<number, string>();
     if (!this.active) return out;
-    for (const p of this.players) if (p.seat >= 0) out.set(p.seat, p.name);
+    for (const p of this.players) {
+      // Connected only. A dropped player's seat is HELD for a while (see
+      // REJOIN_GRACE_MS) and the lobby shows that as a "…" row so the room can
+      // see somebody is missing — but the kart is being driven by the AI in the
+      // meantime, so putting it on the in-race board labels a computer with a
+      // child's name, or worse with an ellipsis. It comes back when they do.
+      if (p.seat >= 0 && p.connected) out.set(p.seat, p.name);
+    }
     return out;
   }
 

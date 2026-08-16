@@ -58,7 +58,15 @@ const LIMITS = {
   maxLagMs: 400,
   /** the throttle was held for seconds; the host must show it moved */
   minClientKartTravel: 25,
+  /**
+   * Above this median frame time the client page is not running well enough for
+   * the lag gate to mean anything — 50 ms is three missed vsyncs, i.e. a page
+   * that is being starved rather than one that is behind on packets.
+   */
+  starvedFrameMs: 50,
 };
+
+let starved = false;
 
 const cleanups = [];
 async function cleanup(code) {
@@ -141,6 +149,21 @@ await host.evaluate(() => {
 
 // Hold the throttle on the CLIENT, with real key events — the point is to
 // exercise the whole input stack, not to poke a number into the state object.
+// Watch the client's own frame interval, so a starved page can say so.
+await client.evaluate(() => {
+  let last = performance.now();
+  const seen = [];
+  const tick = () => {
+    const now = performance.now();
+    seen.push(now - last);
+    last = now;
+    if (seen.length > 600) seen.shift();
+    window.__frameMs = seen.slice().sort((a, b) => a - b)[seen.length >> 1];
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
+
 await client.bringToFront();
 await client.keyboard.down('ArrowUp');
 
@@ -148,6 +171,15 @@ await client.keyboard.down('ArrowUp');
 await wait(RACE_MS);
 
 // Sample both ends as close together as the two pages allow, then stop.
+// How healthy was the client's own frame loop? The lag gate below compares two
+// pages' clocks, so it is only meaningful if the client was actually running.
+// One run of this harness failed with every remote kart "2550 ms behind the
+// host" and an immediate re-run passed at 87 ms with identical finishing
+// orders — the client page had been starved, which CLAUDE.md warns about
+// directly ("benchmark runs degrade this machine, so idle between them"). A
+// starved page must report itself as starved rather than as a netcode fault.
+const clientFrames = await client.evaluate(() => window.__frameMs ?? -1);
+
 const clientState = await client.evaluate(() => ({
   at: performance.now(),
   karts: window.__ctx.race.karts.map((k) => ({
@@ -235,7 +267,12 @@ for (const ck of clientState.karts) {
         `showing the host's world`,
       );
     } else if (lagMs > LIMITS.maxLagMs) {
-      failures.push(`kart ${ck.id} is ${Math.round(lagMs)} ms behind the host — too far`);
+      // Only a fault if the client was keeping up well enough to be judged.
+      if (clientFrames > LIMITS.starvedFrameMs) {
+        starved = true;
+      } else {
+        failures.push(`kart ${ck.id} is ${Math.round(lagMs)} ms behind the host — too far`);
+      }
     }
   }
 
@@ -250,6 +287,14 @@ for (const ck of clientState.karts) {
 
 console.table(rows);
 console.log(`[net-race] race state — host ${hostState.state}, client ${clientState.state}`);
+console.log(`[net-race] client median frame ${clientFrames.toFixed?.(1) ?? clientFrames} ms`);
+if (starved) {
+  console.warn(
+    `[net-race] LAG GATE SKIPPED: the client page was starved (median frame ` +
+    `${Math.round(clientFrames)} ms). Positions and standings were still checked. ` +
+    `Idle the machine and re-run before believing anything about latency.`,
+  );
+}
 
 // --- does anything besides position cross the wire? --------------------------
 const stats = {
