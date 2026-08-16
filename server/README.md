@@ -34,23 +34,37 @@ wanders off mid-race, it has no latency advantage over the players, and it can s
 and the QR while the race runs. A phone *can* host; it is just the worst candidate for the
 job.
 
-## The wake-lock problem, and the case for putting this on a VPS
+## Screens going to sleep
 
-Phones sleep. The Screen Wake Lock API stops them, and the game asks for it at the start of
-every race — but it **only exists in a secure context**, and a plain `http://192.168.x.x` LAN
-address is not one. Over LAN http the request is refused, quietly, and phones will dim
-mid-race.
+The game asks for a Screen Wake Lock at the start of every race, but that API **only exists
+in a secure context** — a plain `http://192.168.x.x` LAN address is not one, so over LAN http
+the request is quietly refused and the phones are on their own.
 
-Two ways out, in order of how well they work:
+**Be precise about what that costs, because it is smaller than it sounds.** The OS idle timer
+is reset by TOUCH, not by rendering, so a player with a thumb on the steering stick keeps
+their own screen awake by playing. What is exposed is every moment nobody is touching the
+glass:
 
-1. **Put the relay behind HTTPS on a box that already has a certificate** (Sam's droplet has
-   Caddy in front of it). The relay is only a byte-mover, so hosting it off-LAN costs one
-   extra hop each way — on a home connection to a nearby VPS that is tens of milliseconds,
-   which this game does not notice. You get wake lock, no certificate warnings, and a URL
-   that does not change every time the router hands out new addresses. **The authoritative
-   host is still the laptop in the house** — that does not move.
-2. **Stay on the LAN and accept it.** Everything else works; turn the phones' auto-lock up
-   before you start.
+- the lobby, waiting for the last child to join — easily a minute;
+- the countdown, and the results board;
+- **tilt steering**, which is one of the four shipped control schemes, combined with
+  auto-accelerate, which is ON by default on touch. That combination is a supported way to
+  play a whole lap without touching the screen once.
+
+Three ways out, cheapest first:
+
+1. **Turn the phones' Auto-Lock off before you start** (iOS: Settings → Display & Brightness
+   → Auto-Lock → Never). Twenty seconds a phone, no code, works today. Do this whatever else
+   you do.
+2. **Put the relay behind HTTPS on a box that already has a certificate.** The relay is only
+   a byte-mover, so hosting it off-LAN costs one extra hop each way — on a home connection to
+   a nearby VPS that is tens of milliseconds, which this game does not notice. You get wake
+   lock, no certificate warnings, and a URL that does not change every time the router hands
+   out new addresses. **The authoritative host is still the laptop in the house** — that does
+   not move.
+3. **A self-signed certificate on the LAN box.** Works in principle, and every phone gets a
+   full-page security warning it has to be talked through first. Worse than either of the
+   above for an audience of children.
 
 ## Verify
 

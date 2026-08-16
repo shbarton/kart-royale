@@ -256,7 +256,11 @@ hit changes nothing; the real consequence arrives as state in the same snapshot 
   direction; the wire would need one more bit.
 - **Your own item icon can flicker** for up to 300 ms after you fire, when the host is still
   reporting it as held. Suppressed by a timer, not by a fix.
-- **Wake lock does not work over plain LAN http** — it needs a secure context. This is the
-  most likely thing to spoil an actual session; see `server/README.md`.
+- **Wake lock does not work over plain LAN http** — it needs a secure context, and the
+  request is refused quietly. Smaller than it first looks: the idle timer resets on TOUCH, so
+  a player steering with a thumb keeps their own screen lit. What is exposed is the lobby,
+  the countdown, the results board, and anyone using the tilt scheme with auto-accelerate —
+  which is a supported way to drive a whole lap without touching the glass. Mitigation
+  ladder in `server/README.md`; the free one is turning Auto-Lock off on the phones.
 - **Untested:** a phone as the host, reconnect after a real drop, pausing mid-race, and more
   than two machines at once. All are implemented; none has been run.
