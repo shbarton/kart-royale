@@ -51,6 +51,8 @@ export class LobbyScreen {
   private ctx!: Ctx;
 
   private nameInput!: HTMLInputElement;
+  /** the join pane's own name field — see `buildJoin` for why there are two */
+  private joinNameInput!: HTMLInputElement;
   private codeInput!: HTMLInputElement;
   private codeBig!: HTMLDivElement;
   private qrBox!: HTMLDivElement;
@@ -66,6 +68,8 @@ export class LobbyScreen {
   /** The code the QR currently encodes — regenerating it every frame is waste. */
   private qrFor = '';
   private ready = false;
+  /** so the empty-name nudge happens once, not on every tap */
+  private namePrompted = false;
 
   constructor(parent: HTMLElement, private readonly net: Net) {
     this.root = el('div', 'kr-lobby', parent);
@@ -75,7 +79,7 @@ export class LobbyScreen {
       room: this.buildRoom(),
       error: this.buildError(),
     };
-    net.onChange = () => this.sync();
+    net.onChange(() => this.sync());
   }
 
   init(ctx: Ctx) {
@@ -87,6 +91,12 @@ export class LobbyScreen {
       this.show();
       this.codeInput.value = wanted;
       this.setPane('join');
+      // The room is already answered, so the only thing left to say is who you
+      // are. Put the cursor there. (Not `focus()` with a keyboard-raising
+      // side effect on a first-time-visitor gesture-less load — iOS ignores
+      // programmatic focus outside a user gesture anyway, so this is a hint to
+      // the eye via :focus styling, not a keyboard.)
+      if (!savedName()) this.joinNameInput.focus();
     }
   }
 
@@ -99,6 +109,7 @@ export class LobbyScreen {
     // layer to take the steering controls off a screen you cannot drive from.
     document.documentElement.dataset.menu = 'lobby';
     this.nameInput.value = savedName();
+    this.joinNameInput.value = savedName();
     this.setPane(this.net.active ? 'room' : 'choose');
     this.sync();
   }
@@ -214,6 +225,21 @@ export class LobbyScreen {
     el('div', 'kr-lobby-title', p, 'Join a room');
     el('div', 'kr-lobby-blurb', p, 'Type the code on the host’s screen.');
 
+    // This pane carries its OWN name field, and it has to.
+    //
+    // A phone that arrived by scanning the QR code lands straight here — that
+    // is the whole point of putting the room in the link — and never sees the
+    // choose pane where the other name field lives. Without this, every child
+    // who joined the way we are telling them to join was called "Racer", which
+    // is exactly what happened the first time anyone played it.
+    const nameField = el('label', 'kr-lobby-field', p);
+    el('span', undefined, nameField, 'Your name');
+    this.joinNameInput = el('input', 'kr-lobby-input', nameField);
+    this.joinNameInput.maxLength = 12;
+    this.joinNameInput.autocomplete = 'off';
+    this.joinNameInput.placeholder = 'Racer';
+    this.joinNameInput.onkeydown = (e) => { if (e.key === 'Enter') this.doJoin(); };
+
     const field = el('label', 'kr-lobby-field', p);
     el('span', undefined, field, 'Room code');
     this.codeInput = el('input', 'kr-lobby-input kr-lobby-code-in', field);
@@ -239,9 +265,19 @@ export class LobbyScreen {
   private doJoin() {
     const code = cleanRoomCode(this.codeInput.value);
     if (code.length < 3) { this.codeInput.focus(); return; }
-    rememberName(this.nameInput.value);
+    const name = this.joinNameInput.value.trim();
+    // Nudge rather than block. A child who taps Join with an empty name gets
+    // the cursor put in the right box once; if they ignore it and tap again
+    // they are let in as "Racer", because a lobby that will not let you in
+    // until you have filled a form is worse than a lobby with a Racer in it.
+    if (!name && !this.namePrompted) {
+      this.namePrompted = true;
+      this.joinNameInput.focus();
+      return;
+    }
+    rememberName(name || 'Racer');
     this.ready = false;
-    this.net.connect('player', code, this.nameInput.value);
+    this.net.connect('player', code, name || 'Racer');
     this.setPane('room');
   }
 

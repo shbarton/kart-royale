@@ -2171,3 +2171,105 @@ html[data-touch][data-touch-hand="left"] .kr .kr-pos {
   .kr-roster { margin-top: 0.7vmin; }
   .kr-menu-list { margin-top: 0.7vmin; }
 }
+
+/* ==========================================================================
+   THE PLAYER BOARD, AND THE PHONE DECLUTTER
+   ==========================================================================
+   Both come from the same session of watching this run on an actual phone
+   with actual children on it, and they are the same complaint twice.
+
+   The HUD was designed for one human in a field of seven robots, on a
+   desktop-sized frame. Put three kids in the race on 390 px of landscape
+   phone and two things are wrong at once: the screen carries more widgets
+   than a 6" panel can hold at arm's length, and the widget with the most
+   visual weight on it — POSITION, six of eight — is answering a question
+   nobody in the room is asking. They want to know if they are beating their
+   sister.
+   ========================================================================== */
+
+/* --- the board ------------------------------------------------------------
+   Takes the position plate's spot at left-centre. Rows are people, so this is
+   two to four of them and never eight; that is what keeps it from becoming
+   the timing tower Round 8 deleted for sitting on the outside of every
+   right-hand corner. */
+.kr-board {
+  position: absolute;
+  left: env(safe-area-inset-left, 0px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  flex-direction: column;
+  gap: 0.5vmin;
+  pointer-events: none;
+}
+.kr-board.on { display: flex; }
+
+.kr-board-row {
+  --c: var(--gold);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0.7em;
+  padding: 0.22em 0.8em 0.28em 0.55em;
+  border-radius: 0 0.7em 0.7em 0;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--c) 26%, rgba(23, 16, 11, 0.86)),
+    rgba(23, 16, 11, 0.72));
+  border-left: 0.4vmin solid var(--c);
+  /* The type has to survive a blown-out sky with no plate under it — same
+     rule as every other numeral in this HUD (§7). */
+  text-shadow: 0 0.16vmin 0 var(--ink-c), 0 0.5vmin 1.2vmin rgba(20, 10, 4, 0.75);
+}
+/* Your own row is the one you find without reading. */
+.kr-board-row.you {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--c) 46%, rgba(23, 16, 11, 0.86)),
+    rgba(23, 16, 11, 0.66));
+}
+
+.kr-board-p {
+  font-family: var(--fd);
+  font-weight: 900;
+  font-size: clamp(15px, 2.6vmin, 30px);
+  color: var(--paper);
+  min-width: 1ch;
+  text-align: center;
+}
+.kr-board-n {
+  font-family: var(--fd);
+  font-weight: 800;
+  font-size: clamp(11px, 1.9vmin, 21px);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(248, 242, 230, 0.9);
+  white-space: nowrap;
+}
+/* Two widgets, one slot. Hidden rather than layered: `.kr-pos` carries the
+   live rival row, which would go on ticking underneath. */
+.kr-pos.replaced { display: none; }
+
+/* Mirrored controls move the board with the plate it replaced, for the same
+   reason — the action cluster would land on top of it. */
+html[data-touch][data-touch-hand="left"] .kr .kr-board {
+  left: auto;
+  right: env(safe-area-inset-right, 0px);
+  align-items: flex-end;
+}
+html[data-touch][data-touch-hand="left"] .kr .kr-board-row {
+  border-left: 0;
+  border-right: 0.4vmin solid var(--c);
+  border-radius: 0.7em 0 0 0.7em;
+  direction: rtl;
+}
+
+/* --- the phone declutter --------------------------------------------------
+   THE SPEEDOMETER GOES. Asked for directly, and it is the right call: it is
+   the largest widget on the bottom rail and the number on it changes nothing
+   anybody does. You already know how fast you are going — the screen is full
+   of it. Kept on desktop, which is the host's big screen and has the room.
+
+   THE LAP PLATE SHRINKS. It is read twice a lap. It does not need to be the
+   same size as things read continuously. */
+html[data-touch] .kr .kr-speed { display: none; }
+html[data-touch] .kr .kr-lap { transform: scale(0.78); transform-origin: 0 0; }
+html[data-touch][data-touch-hand="left"] .kr .kr-lap { transform-origin: 100% 0; }

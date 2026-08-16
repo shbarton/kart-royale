@@ -73,6 +73,27 @@ const FOV_SPEED = 5.0;
 /** weight on ctx.fovPunch, which peaks near 10.5 degrees on a boost. The arm
  *  closes by BOOST_DIST at the same time; the pair is a dolly zoom. */
 const FOV_BOOST = 0.8;
+/**
+ * How much of that punch a PHONE takes. Reported from the first session with
+ * children on it as the view "shifting the perspective", blamed on driving
+ * over an item box — `tools/pickup-probe.mjs` cleared the item box (an
+ * isolated pickup with no boost near it moves nothing, and no browser
+ * viewport metric moves at all) and found the lens.
+ *
+ * The punch is the same number of degrees on every device, and that is the
+ * bug: it was tuned on a desktop monitor at arm's length, where ~9 degrees
+ * arriving in three frames is a kick. On a 6" screen held close it subtends
+ * far more of the visual field and reads as the world lurching sideways.
+ *
+ * Scales the PUNCH only. The sustained `fovSpeed` term is untouched, because
+ * a lens that opens with speed is one of the five cues that separate a 101
+ * km/h frame from a 55 km/h one and flattening it would take the sense of
+ * speed out of the game to fix a jolt. And it is applied HERE, not to
+ * `ctx.fovPunch` itself, because PostFX has no boost flag and recovers one
+ * from that signal's magnitude (see KICK_LO / KICK_HI) — scaling the signal
+ * would silently stop the boost effects firing on phones.
+ */
+const FOV_BOOST_TOUCH = 0.5;
 /** degrees the field opens at |corner| = 1, so more of the exit is in shot */
 const FOV_CORNER = 3.0;
 /** ...and closes under braking, which reads as the world slowing down */
@@ -765,7 +786,21 @@ export class ChaseCamera implements System {
     // short hold window makes both spellings behave sensibly.
     if (ctx.input.state.lookBack) this.lookHold = 0.3; else this.lookHold -= dt;
     const wantLook = this.lookHold > 0 && state === RaceState.Racing && mode === 'chase' ? 1 : 0;
-    this.lookAmt = damp1(this.lookAmt, wantLook, this.lookVel, 0.19, dt);
+    // ASYMMETRIC, and deliberately so. Looking behind is not a camera move, it
+    // is a QUESTION — "is there a shell on me?" — and the answer is only worth
+    // anything immediately. Easing into it over 0.19 s meant the useful part of
+    // the glance arrived after the moment that prompted it, and you spent the
+    // swing looking at the side of your own kart.
+    //
+    // So: snap there, then ease back. Coming back is a different act — the road
+    // ahead has moved on while you were not watching it, and being returned to
+    // it in one frame is genuinely disorienting in a way that the glance is not.
+    if (wantLook > this.lookAmt) {
+      this.lookAmt = 1;
+      this.lookVel.v = 0;
+    } else {
+      this.lookAmt = damp1(this.lookAmt, wantLook, this.lookVel, 0.12, dt);
+    }
 
     // --- 2. has the subject been teleported? ------------------------------
     _tmp.copy(k.position).sub(this.prevKart);
@@ -1572,7 +1607,7 @@ export class ChaseCamera implements System {
       target = clamp(
         FOV_BASE
         + sp * feel.fovSpeed
-        + ctx.fovPunch * FOV_BOOST
+        + ctx.fovPunch * FOV_BOOST * (ctx.input.touch ? FOV_BOOST_TOUCH : 1)
         + this.lookAmt * 3.0
         + Math.abs(this.corner) * FOV_CORNER
         - this.brakeAmt * FOV_BRAKE,

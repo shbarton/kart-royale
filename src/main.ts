@@ -184,6 +184,9 @@ async function boot() {
   // screens, exactly like the controls screen.
   const lobby = new LobbyScreen(hud.layer, net);
   lobby.init(ctx);
+  // The in-race board shows the humans by name. The HUD is told who they are;
+  // it never learns that a network exists.
+  net.onChange(() => hud.setRacers(net.racerNames()));
   hud.menu.onMultiplayer = () => lobby.show();
   hud.menu.isLobbyOpen = () => lobby.open;
   hud.menu.onNetQuit = () => net.leave();

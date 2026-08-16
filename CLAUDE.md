@@ -127,9 +127,19 @@ a question that is genuinely hard to answer by looking.
 | `autoplay.mjs`, `shot.mjs` | Play a race unattended; capture frames. |
 | `net-race.mjs` | Do two machines actually race each other? Opens two browsers, hosts and joins, drives the client with real key events, then checks the client's karts sit on the host's *recorded path*, that the host received the input, and that both agree on every lap, place and the finishing order. |
 | `lobby-shots.mjs` | Clicks through Multiplayer → host a room → a phone joins by QR link, and photographs each step. The lobby's contrast was set by looking at these: a scrim that looks right over the title card is unreadable over a sunlit circuit. |
+| `mobile-hud-shot.mjs` | The in-race HUD on a phone, in a race that has other humans in it — the player board only exists when the game has been told who they are, so single-player cannot show it. |
+| `pickup-probe.mjs` | When a player says "the view shifted", was it the BROWSER (scroll/zoom) or the GAME (lens)? Samples both across a pickup and prints whichever moved. |
 
 Rules learned the hard way:
 
+- **A phone-shaped viewport is not a phone.** `isMobile: true` does not put the
+  game in touch mode: the pad mounts LAZILY on the first genuine pointer, so
+  until something actually touches the glass `input.touch` is false and every
+  `html[data-touch]` rule under test is inert. Worse, `Input.onFirstKey`
+  *unmounts* it again the moment a real key arrives — so a harness that taps to
+  mount and then drives with ArrowUp photographs a desktop HUD at phone size and
+  passes. Tap a read-only area, assert `input.touch === true`, and drive with
+  auto-accelerate rather than the keyboard.
 - **Validate the instrument before trusting the reading.** Two harnesses here
   produced confident, precise, entirely fictional numbers before anyone checked
   them — one projected a camera-relative vector as if it were a world point, and

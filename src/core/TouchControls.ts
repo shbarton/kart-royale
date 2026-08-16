@@ -134,9 +134,30 @@ export interface TouchState {
  * a whole hand's travel. Changing this without re-deriving CURVE breaks the
  * half-travel proof below.
  */
-const STICK_RADIUS_MIN = 84;
-const STICK_RADIUS_FRAC = 0.24;
-const STICK_RADIUS_MAX = 116;
+/**
+ * How far the thumb travels for full lock.
+ *
+ * Raised ~17% (84/0.24/116 -> 94/0.28/132) after the first session with
+ * children on it: "the steering seems to be slightly too sensitive... it
+ * should be a little bit more like Mario Kart". Sensitivity IS this number —
+ * a shorter throw means the same thumb movement asks for more lock.
+ *
+ * Note carefully what this does NOT change. The expo in `curve()` is written
+ * in NORMALISED travel, and `CURVE = 1.26` is a measured value with an
+ * invariant attached (half-travel output must stay within 0.005 of 0.3990 —
+ * see the comment on CURVE). Because the curve maps a FRACTION of the radius,
+ * enlarging the radius leaves half-travel output exactly where it was and
+ * simply spends more millimetres of thumb getting there. The mid-range
+ * response the previous round tuned so carefully survives intact; only the
+ * gearing changes. `tools/touch-feel.mjs` re-verified after the change.
+ *
+ * The ceiling is a reach limit, not a taste: the stick floats to wherever the
+ * thumb lands, but full lock still has to be reachable without regripping on
+ * the smallest phone we care about.
+ */
+const STICK_RADIUS_MIN = 94;
+const STICK_RADIUS_FRAC = 0.28;
+const STICK_RADIUS_MAX = 132;
 /** No grab may be tighter than this, or full lock stops being reachable. */
 const R_GRAB_MIN = 56;
 

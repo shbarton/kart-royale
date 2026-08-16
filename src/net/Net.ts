@@ -105,8 +105,24 @@ export class Net implements System {
   /** which kart this machine drives, or -1 before a seat has been handed out */
   mySeat = -1;
   myName = '';
-  /** Fired whenever anything the lobby screen shows has changed. */
-  onChange: (() => void) | null = null;
+
+  /**
+   * Subscribe to "anything about who is in this race has changed".
+   *
+   * A list rather than a single slot: the lobby screen wants it to redraw its
+   * roster, and the HUD wants it to keep the in-race name board honest. The
+   * single-callback version silently gave the whole feature to whichever of
+   * them was constructed second.
+   */
+  onChange(fn: () => void): () => void {
+    this.listeners.push(fn);
+    return () => {
+      const i = this.listeners.indexOf(fn);
+      if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+
+  private listeners: (() => void)[] = [];
 
   get active(): boolean { return this.phase !== 'off' && this.phase !== 'error'; }
   get isHost(): boolean { return this.role === 'host'; }
@@ -312,7 +328,21 @@ export class Net implements System {
     this.changed();
   }
 
-  private changed() { this.onChange?.(); }
+  private changed() { for (const fn of this.listeners) fn(); }
+
+  /**
+   * Who the humans in this race are, as kart index -> display name.
+   *
+   * The HUD uses this to put real names on the in-race board. Empty in a
+   * single-player race, which is how the HUD knows to show the old position
+   * plate instead — one row reading "1st  DAD" is not a leaderboard.
+   */
+  racerNames(): Map<number, string> {
+    const out = new Map<number, string>();
+    if (!this.active) return out;
+    for (const p of this.players) if (p.seat >= 0) out.set(p.seat, p.name);
+    return out;
+  }
 
   private measurePing() {
     const t0 = performance.now();

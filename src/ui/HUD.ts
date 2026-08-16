@@ -213,6 +213,10 @@ export class HUD implements System {
   /** throttle on the gap recompute — 10 Hz is well past the eye's read rate */
   private gapT = 0;
   private posWrap!: HTMLDivElement;
+  /** the human-players board; see `setRacers` */
+  private boardEl!: HTMLDivElement;
+  private racers: Map<number, string> | null = null;
+  private boardKey = '';
   private posIn!: HTMLDivElement;
   private posNum!: Pair;
   private posSuf!: Pair;
@@ -448,6 +452,69 @@ export class HUD implements System {
     this.relChip = el('span', 'kr-rel-c', this.relRow);
     this.relName = el('span', 'kr-rel-n', this.relRow, 'Grid');
     this.relVal = el('span', 'kr-rel-v', this.relRow, '—');
+
+    // THE PLAYER BOARD — what replaces all of the above in a race with other
+    // humans in it.
+    //
+    // The position plate answers "where am I in a field of eight", and it is
+    // the right answer when the other seven are the computer. Put three
+    // children in the race and it is the wrong question entirely: nobody cares
+    // about 6th of 8, they care whether they are ahead of their sister. So
+    // when we are told who the humans are, this board shows exactly them —
+    // position and name, two to four rows — and the plate hides.
+    //
+    // It is deliberately NOT the eight-row timing tower Round 8 removed. That
+    // was removed for occluding the outside of every right-hand corner, and it
+    // would still be wrong here; this stays small because it only ever lists
+    // people.
+    this.boardEl = el('div', 'kr-board', this.hud);
+  }
+
+  /**
+   * Tell the HUD who the humans are, as kart index -> name.
+   *
+   * Pushed in from outside (see `main.ts`) rather than read from a session,
+   * because the HUD has no business knowing that networking exists. An empty
+   * map means single player, and the position plate takes over again.
+   */
+  setRacers(names: Map<number, string> | null) {
+    this.racers = names && names.size >= 2 ? names : null;
+    this.boardKey = '';
+    const board = !!this.racers;
+    this.boardEl?.classList.toggle('on', board);
+    // Two widgets for one slot: whichever is live, the other must be gone
+    // rather than merely behind it — `.kr-pos` carries the rival row, which is
+    // a live readout that would keep animating under the board.
+    this.posWrap?.classList.toggle('replaced', board);
+  }
+
+  /**
+   * The board, rebuilt only when the ORDER or the names actually change.
+   *
+   * Places change a handful of times a lap; rebuilding four rows every frame
+   * would be four allocations a frame to redraw the same four rows, which is
+   * the mistake the pause screen's running order already documents.
+   */
+  private updateBoard(ctx: Ctx) {
+    const racers = this.racers;
+    if (!racers) return;
+    const order = ctx.race.standings.length ? ctx.race.standings : ctx.race.karts;
+    const mine = ctx.race.player;
+
+    let key = '';
+    for (const k of order) if (racers.has(k.id)) key += `${k.id}:${k.place}|`;
+    if (key === this.boardKey) return;
+    this.boardKey = key;
+
+    this.boardEl.textContent = '';
+    for (const k of order) {
+      const name = racers.get(k.id);
+      if (name === undefined) continue;
+      const row = el('div', 'kr-board-row' + (k === mine ? ' you' : ''), this.boardEl);
+      row.style.setProperty('--c', cssColor(k.stats.color));
+      el('span', 'kr-board-p', row, String(k.place));
+      el('span', 'kr-board-n', row, name);
+    }
   }
 
   private buildItem() {
@@ -830,6 +897,9 @@ export class HUD implements System {
       this.gapT = 0.1;
       this.updateRival(ctx, place, counting);
     }
+
+    // --- the other humans, if there are any ---------------------------------
+    this.updateBoard(ctx);
 
     // --- item --------------------------------------------------------------
     this.updateItem(ctx, dt);
