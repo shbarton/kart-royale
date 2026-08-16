@@ -68,32 +68,45 @@ const FOV_H_MAX = 100;
 const FOV_H_MIN = 62;
 const FOV_V_MAX = 78;
 const FOV_V_MIN = 30;
+/**
+ * Vertical degrees the horizontal ceiling is not allowed to clamp away. See
+ * `fitFov`. Set just above the most the rig ever asks for while cruising plus a
+ * full boost's worth of opening, so the boost's lens move survives on an
+ * ultra-wide frame; past this the horizontal bound takes over again and a
+ * genuinely absurd request still gets caught.
+ */
+const FOV_V_KEEP = 58;
+
+/** Horizontal field, degrees, for a vertical field on this aspect. */
+function hFromV(v: number, a: number): number {
+  return (2 * Math.atan(Math.tan((v * Math.PI) / 360) * a) * 180) / Math.PI;
+}
+
+/** ...and back the other way. */
+function vFromH(h: number, a: number): number {
+  return (2 * Math.atan(Math.tan((h * Math.PI) / 360) / a) * 180) / Math.PI;
+}
 /** degrees the field opens between a standstill and top speed */
 const FOV_SPEED = 5.0;
 /** weight on ctx.fovPunch, which peaks near 10.5 degrees on a boost. The arm
  *  closes by BOOST_DIST at the same time; the pair is a dolly zoom. */
 const FOV_BOOST = 0.8;
-/**
- * How much of that punch a PHONE takes. Reported from the first session with
- * children on it as the view "shifting the perspective", blamed on driving
- * over an item box — `tools/pickup-probe.mjs` cleared the item box (an
- * isolated pickup with no boost near it moves nothing, and no browser
- * viewport metric moves at all) and found the lens.
+/*
+ * THERE IS NO TOUCH SCALE ON THE LENS PUNCH, AND THERE WAS BRIEFLY.
  *
- * The punch is the same number of degrees on every device, and that is the
- * bug: it was tuned on a desktop monitor at arm's length, where ~9 degrees
- * arriving in three frames is a kick. On a 6" screen held close it subtends
- * far more of the visual field and reads as the world lurching sideways.
+ * An earlier round halved it on touch, to fix a report of the view "shifting
+ * the perspective" on a boost. That was a wrong fix aimed at a non-cause, and
+ * `fitFov` is why: on the reporter's aspect the vertical field was PINNED at
+ * 45.2 degrees, so the punch was already producing exactly nothing on that
+ * device and halving nothing achieved nothing. What actually moved was the
+ * dolly — the arm coming in and dropping — which is scaled on touch, below,
+ * and that part was right.
  *
- * Scales the PUNCH only. The sustained `fovSpeed` term is untouched, because
- * a lens that opens with speed is one of the five cues that separate a 101
- * km/h frame from a 55 km/h one and flattening it would take the sense of
- * speed out of the game to fix a jolt. And it is applied HERE, not to
- * `ctx.fovPunch` itself, because PostFX has no boost flag and recovers one
- * from that signal's magnitude (see KICK_LO / KICK_HI) — scaling the signal
- * would silently stop the boost effects firing on phones.
+ * With the clamp fixed the punch is live on a phone for the first time, and it
+ * is now the thing doing the most good: the lens opening is what BUYS road
+ * ahead on a boost, and it is no longer being cancelled by an arm that comes
+ * all the way in. Left at full strength deliberately.
  */
-const FOV_BOOST_TOUCH = 0.5;
 /** degrees the field opens at |corner| = 1, so more of the exit is in shot */
 const FOV_CORNER = 3.0;
 /** ...and closes under braking, which reads as the world slowing down */
@@ -1621,9 +1634,33 @@ export class ChaseCamera implements System {
   private fitFov(v: number): number {
     const a = this.aspect;
     let vv = clamp(v, FOV_V_MIN, FOV_V_MAX);
-    const hDeg = (2 * Math.atan(Math.tan((vv * Math.PI) / 360) * a) * 180) / Math.PI;
-    const hClamped = clamp(hDeg, FOV_H_MIN, FOV_H_MAX);
-    if (hClamped !== hDeg) vv = (2 * Math.atan(Math.tan((hClamped * Math.PI) / 360) / a) * 180) / Math.PI;
+    const hDeg = hFromV(vv, a);
+    // THE HORIZONTAL CEILING MAY NOT EAT THE VERTICAL.
+    //
+    // `FOV_H_MAX` is a flat 100 degrees, and on a 16:9 frame it never binds. On
+    // a landscape PHONE it binds permanently and it is spending the wrong
+    // resource. Measured at 844x295 CSS px (aspect 2.86 — a phone in landscape
+    // once the browser chrome is taken off):
+    //
+    //     asked 50 -> 45.2      asked 58 -> 45.2
+    //     asked 54 -> 45.2      asked 62 -> 45.2
+    //
+    // Not a rounding error: the vertical field was PINNED. The rig opens the
+    // lens on a boost, and on that device nothing happened — every degree it
+    // asked for was clamped away, while the other half of the same dolly zoom
+    // (the arm coming in and dropping) went ahead as normal. So a boost on a
+    // phone cost you road ahead and gave nothing back, which is exactly the
+    // reported "I still can't see in front of me properly, especially when
+    // boosting".
+    //
+    // On a wide frame the vertical is the scarce thing and the horizontal is
+    // abundant, so the ceiling now lifts to whatever that aspect needs to carry
+    // `FOV_V_KEEP` degrees of vertical. It never falls below the old 100, so no
+    // narrower aspect changes at all — at 1.6 the ceiling is still 100 and this
+    // whole branch is inert.
+    const hCeil = Math.max(FOV_H_MAX, hFromV(Math.min(vv, FOV_V_KEEP), a));
+    const hClamped = clamp(hDeg, FOV_H_MIN, hCeil);
+    if (hClamped !== hDeg) vv = vFromH(hClamped, a);
     return clamp(vv, FOV_V_MIN, FOV_V_MAX);
   }
 
@@ -1646,7 +1683,7 @@ export class ChaseCamera implements System {
       target = clamp(
         FOV_BASE
         + sp * feel.fovSpeed
-        + ctx.fovPunch * FOV_BOOST * (ctx.input.touch ? FOV_BOOST_TOUCH : 1)
+        + ctx.fovPunch * FOV_BOOST
         + this.lookAmt * 3.0
         + Math.abs(this.corner) * FOV_CORNER
         - this.brakeAmt * FOV_BRAKE,
