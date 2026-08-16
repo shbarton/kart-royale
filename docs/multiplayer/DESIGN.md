@@ -116,7 +116,15 @@ structurally prevents two phones from disagreeing.
 ```
 
 The relay and the host can be the same machine (the laptop runs both), or the relay can
-live on the VPS while a laptop hosts — both work.
+live on the VPS while a laptop hosts.
+
+> **Correction, 2026-08-16.** "Both work" was written before anyone measured it. The relay
+> is in the middle of the control loop — input goes phone → relay → host and the answer
+> comes back host → relay → phone — so an off-LAN relay pays its round trip TWICE. The SFO2
+> droplet measures 158 ms RTT, which puts ~450 ms between pressing a button and seeing
+> another kart react. Your own kart is unaffected (locally simulated), but the field is
+> stale and hits land late. A relay ~20 ms away is fine; that one is not. Keep the relay on
+> the LAN unless you have measured the alternative. See `server/README.md`.
 
 ## 4. Plan (phased, each phase is playable-ish)
 

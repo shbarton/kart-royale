@@ -56,15 +56,26 @@ Three ways out, cheapest first:
 1. **Turn the phones' Auto-Lock off before you start** (iOS: Settings → Display & Brightness
    → Auto-Lock → Never). Twenty seconds a phone, no code, works today. Do this whatever else
    you do.
-2. **Put the relay behind HTTPS on a box that already has a certificate.** The relay is only
-   a byte-mover, so hosting it off-LAN costs one extra hop each way — on a home connection to
-   a nearby VPS that is tens of milliseconds, which this game does not notice. You get wake
-   lock, no certificate warnings, and a URL that does not change every time the router hands
-   out new addresses. **The authoritative host is still the laptop in the house** — that does
-   not move.
-3. **A self-signed certificate on the LAN box.** Works in principle, and every phone gets a
-   full-page security warning it has to be talked through first. Worse than either of the
-   above for an audience of children.
+2. **A real certificate for a name that points at the LAN box.** Put an A record for
+   something like `race.example.com` on the host's LAN address and issue a certificate by
+   DNS-01 challenge (no inbound port needed). Phones trust it, no warnings, and **the traffic
+   never leaves the house**. This is the right answer if it works; the catch is that some
+   routers and resolvers refuse to return a private address for a public name (DNS-rebinding
+   protection), so it needs testing on the actual network before you rely on it.
+
+3. **Put the relay on a VPS with a certificate — MEASURE FIRST.** Tempting, and it is what
+   §3.2 above assumed, but the relay sits in the middle of the control loop: a phone's input
+   goes phone → relay → host, and the answer comes back host → relay → phone. Hosting the
+   relay off-LAN therefore pays the round trip to it **twice**.
+
+   Measured 2026-08-16, laptop to the SFO2 droplet: **158 ms RTT**. That makes the loop
+   ~160 ms up, ~160 ms back, plus a snapshot interval and the interpolation delay — call it
+   450 ms from pressing a button to seeing another kart react to it. Your own kart still
+   steers instantly (it is simulated locally), but the rest of the field is a quarter of a
+   second stale and every hit lands late enough to feel unfair.
+
+   A relay on the same continent, ~20 ms away, would be fine. That one is not. Ping it before
+   choosing it.
 
 ## Verify
 
