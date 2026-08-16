@@ -808,20 +808,32 @@ export class ChaseCamera implements System {
     // short hold window makes both spellings behave sensibly.
     if (ctx.input.state.lookBack) this.lookHold = 0.3; else this.lookHold -= dt;
     const wantLook = this.lookHold > 0 && state === RaceState.Racing && mode === 'chase' ? 1 : 0;
-    // ASYMMETRIC, and deliberately so. Looking behind is not a camera move, it
-    // is a QUESTION — "is there a shell on me?" — and the answer is only worth
-    // anything immediately. Easing into it over 0.19 s meant the useful part of
-    // the glance arrived after the moment that prompted it, and you spent the
-    // swing looking at the side of your own kart.
+    // A CUT, BOTH WAYS. Not a camera move at all.
     //
-    // So: snap there, then ease back. Coming back is a different act — the road
-    // ahead has moved on while you were not watching it, and being returned to
-    // it in one frame is genuinely disorienting in a way that the glance is not.
-    if (wantLook > this.lookAmt) {
-      this.lookAmt = 1;
+    // This has now been wrong twice, and the second time is the instructive
+    // one. The original eased `lookAmt` over 0.19 s. Snapping `lookAmt` to 1
+    // fixed nothing visible, because the value it feeds is only the rig's
+    // TARGET: `constrainEye` then rate-limits the eye to MAX_EYE_SLIP (14 m/s
+    // relative to the kart) and the orientation is slerp-limited per frame
+    // against `prevQuat`. A 180 degree flip of a 5.6 m arm moves the eye about
+    // 11 m, so the limiters walked it round over most of a second — exactly
+    // the "it still shifts the camera slowly backwards" that came back.
+    //
+    // Both limiters exist to stop the rig lurching during a spin or a
+    // collision, and they are right for that. A deliberate glance behind is not
+    // that: it is the player asking a question — "is there a shell on me?" —
+    // and the answer is worth nothing unless it is on screen now. So the frame
+    // the state changes is declared a CUT, the same way a teleport is, and
+    // neither limiter applies to it.
+    //
+    // `lookAmt` is therefore strictly 0 or 1; there is no in-between pose to
+    // render, in either direction. Coming back is a cut too — the earlier
+    // version eased the return and that is the same complaint wearing a hat.
+    if (wantLook !== this.lookAmt) {
+      this.lookAmt = wantLook;
       this.lookVel.v = 0;
-    } else {
-      this.lookAmt = damp1(this.lookAmt, wantLook, this.lookVel, 0.12, dt);
+      this.hasPrevEye = false;
+      this.hasPrevQuat = false;
     }
 
     // --- 2. has the subject been teleported? ------------------------------
