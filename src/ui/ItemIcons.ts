@@ -7,7 +7,7 @@
  *    a spotted mushroom with eyes, a footed bomb with a lit fuse, green and
  *    red carapaces. That is not a look this game can ship, whatever it looks
  *    like in a screenshot. The set is now drawn from this circuit's own world:
- *    an espresso, netted glass fishing floats, an Amalfi lemon, the golden
+ *    an espresso, fat cartoon bullets, an Amalfi lemon, the golden
  *    hour itself, a squall, a harbour mooring buoy. Same gameplay slots, same
  *    silhouette weights, original forms.
  *
@@ -62,8 +62,8 @@ export const ITEM_NAMES: Record<number, string> = {
   [ItemKind.None]: '',
   [ItemKind.Mushroom]: 'Turbo Can',
   [ItemKind.TripleMushroom]: 'Triple Turbo',
-  [ItemKind.GreenShell]: 'Glass Float',
-  [ItemKind.RedShell]: 'Homing Float',
+  [ItemKind.GreenShell]: 'Bullet',
+  [ItemKind.RedShell]: 'Homing Bullet',
   [ItemKind.Banana]: 'Lemon',
   [ItemKind.Star]: 'Golden Hour',
   [ItemKind.Bolt]: 'Squall',
@@ -312,54 +312,56 @@ function drawTripleTurbo(g: G) {
 }
 
 /**
- * Netted glass fishing float — the bouncing projectile. Every harbour on this
- * coast has a wall of them.
+ * Fat cartoon cartridge. A sphere-with-a-net read as a toy; a pointed slug
+ * with a brass case reads as "this shoots" at 64 px, in any language.
  */
-function glassFloat(g: G, top: string, bottom: string, homing: boolean) {
+function bullet(g: G, tipTop: string, tipBot: string, homing: boolean) {
   contact(g);
-  const R = 0.345;
-  const body = new Path2D();
-  body.arc(0, 0.035, R, 0, Math.PI * 2);
-  fillKey(g, body, top, bottom, -0.34, 0.40);
-
-  // rope net: three arcs, clipped to the glass
   g.save();
-  g.clip(body);
-  g.strokeStyle = '#efe2c4';
-  g.lineWidth = LW * 0.68;
-  for (const rx of [0.115, 0.245]) {
-    g.beginPath();
-    g.ellipse(0, 0.035, rx, R, 0, 0, Math.PI * 2);
-    g.stroke();
-  }
-  g.beginPath();
-  g.ellipse(0, 0.035, R, 0.125, 0, 0, Math.PI * 2);
-  g.stroke();
-  g.restore();
+  g.rotate(-0.55);
 
-  // knot / hanging loop at the crown
-  const loop = new Path2D();
-  loop.ellipse(0, -0.375, 0.085, 0.075, 0, 0, Math.PI * 2);
-  g.fillStyle = '#efe2c4';
-  g.fill(loop);
-  key(g, loop, LW * 0.9);
+  // primer / rim at the back
+  const rim = new Path2D();
+  rim.ellipse(-0.30, 0.02, 0.11, 0.155, 0, 0, Math.PI * 2);
+  fillKey(g, rim, '#d8c48a', '#6a5420', -0.20, 0.20, LW * 0.9);
+
+  // brass case
+  const body = new Path2D();
+  body.moveTo(-0.30, -0.13);
+  body.lineTo(0.08, -0.145);
+  body.bezierCurveTo(0.16, -0.145, 0.18, -0.12, 0.18, -0.08);
+  body.lineTo(0.18, 0.12);
+  body.bezierCurveTo(0.18, 0.155, 0.16, 0.175, 0.08, 0.175);
+  body.lineTo(-0.30, 0.16);
+  body.closePath();
+  fillKey(g, body, '#f0d78a', '#b07a22', -0.20, 0.20);
+
+  // coloured slug
+  const tip = new Path2D();
+  tip.moveTo(0.14, -0.125);
+  tip.lineTo(0.34, -0.06);
+  tip.bezierCurveTo(0.46, -0.02, 0.46, 0.08, 0.34, 0.12);
+  tip.lineTo(0.14, 0.155);
+  tip.closePath();
+  fillKey(g, tip, tipTop, tipBot, -0.16, 0.18);
 
   if (homing) {
-    // a brass tracking band — this one comes looking for you. One thin ring,
-    // no needle: a band plus a lozenge inside a sphere read as an eye at 64 px.
+    // gold chase band — the only extra mark the seeker gets
     const band = new Path2D();
-    band.ellipse(0, 0.035, R * 1.0, 0.095, 0, 0, Math.PI * 2);
-    g.strokeStyle = INK;
-    g.lineWidth = LW * 1.7;
-    g.stroke(band);
-    g.strokeStyle = '#e0a93a';
-    g.lineWidth = LW * 0.8;
-    g.stroke(band);
+    band.rect(0.00, -0.16, 0.07, 0.34);
+    g.save();
+    g.clip(body);
+    g.fillStyle = ramp(g, '#ffe08a', '#c48812', -0.16, 0.16);
+    g.fill(band);
+    g.restore();
+    key(g, band, LW * 0.7);
   }
+
+  g.restore();
 }
 
-function drawGreenFloat(g: G) { glassFloat(g, '#b8f0a8', '#1e7a35', false); }
-function drawRedFloat(g: G) { glassFloat(g, '#ffb9a4', '#b3202a', true); }
+function drawGreenFloat(g: G) { bullet(g, '#b8f0a8', '#1e7a35', false); }
+function drawRedFloat(g: G) { bullet(g, '#ffb9a4', '#b3202a', true); }
 
 /** Amalfi lemon — the dropped hazard. */
 function drawLemon(g: G) {

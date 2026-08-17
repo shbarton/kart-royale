@@ -19,8 +19,9 @@ import * as THREE from 'three';
 import { ItemKind, RaceState, type Ctx, type IItems, type IKart } from '../types';
 import type { RacingLine } from './AI';
 import {
-  BlobShadows, Projectiles, mushroomArt, pad, padTexture, radialSprite, roundedBox,
+  BlobShadows, Projectiles, canArt, pad, padTexture, radialSprite, roundedBox,
 } from './Projectiles';
+import type { ItemFlight } from '../types';
 
 // --- tuning ------------------------------------------------------------------
 const BOX_SIZE = 1.55;
@@ -114,6 +115,8 @@ interface Box {
   down: number;
   /** 0..1 presence, drives the pop */
   scale: number;
+  /** cooldown so a full-slot overlap doesn't thunk every frame */
+  thunk: number;
 }
 
 const _m = new THREE.Matrix4();
@@ -546,6 +549,11 @@ export class Items implements IItems {
     return this.proj.hazards;
   }
 
+  /** Live thrown/towed items, for VFX. */
+  get flights(): readonly ItemFlight[] {
+    return this.proj.flights;
+  }
+
   /** Full wipe — new race. */
   reset() {
     for (const k of this.karts) {
@@ -563,6 +571,7 @@ export class Items implements IItems {
     for (const b of this.boxes) {
       b.down = 0;
       b.scale = 1;
+      b.thunk = 0;
     }
     this.proj.clear();
   }
@@ -610,6 +619,7 @@ export class Items implements IItems {
           phase: (this.boxes.length % 7) * 0.9 + t * 11,
           down: 0,
           scale: 1,
+          thunk: 0,
         });
       }
     }
@@ -712,7 +722,7 @@ export class Items implements IItems {
   }
 
   private buildOrbit() {
-    const art = mushroomArt('#ff6a5e', '#fff3e0');
+    const art = canArt();
     if (this.ctx.envMap) art.mat.envMap = this.ctx.envMap;
     this.orbitMesh = new THREE.InstancedMesh(art.geo, art.mat, 24);
     this.orbitMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -853,36 +863,52 @@ export class Items implements IItems {
     const s = this.slot(kart);
     const ctx = this.ctx;
 
+    const refuse = () => {
+      if (kart.isPlayer) ctx.bus.emit({ type: 'item-refuse', kart });
+      return false;
+    };
+
     // A trailing shield is released by the same button that deployed it.
     if (s.carried >= 0) {
       if (this.proj.isCarried(s.carried, kart.id)) {
+        const kind = this.proj.carriedKind(s.carried, kart.id);
         const target = backwards ? -1 : this.targetAhead(kart);
         this.proj.release(s.carried, kart, backwards, target);
         s.carried = -1;
+        ctx.bus.emit({ type: 'item-use', kart, kind });
         return true;
       }
       s.carried = -1;
     }
 
-    if (s.kind === ItemKind.None || s.count <= 0) return false;
-    if (s.arm > 0) return false;
-    if (kart.stunTime > 0) return false;
+    if (s.kind === ItemKind.None || s.count <= 0) return refuse();
+    if (s.arm > 0) return refuse();
+    if (kart.stunTime > 0) return refuse();
 
     const kind = s.kind;
     let consumed = true;
+    let announced = false;
 
     switch (kind) {
       case ItemKind.Mushroom:
       case ItemKind.TripleMushroom:
+        // Announce BEFORE applyBoost so VFX paints the can orange before the
+        // generic boost event latches a blue ignition.
+        ctx.bus.emit({ type: 'item-use', kart, kind });
+        announced = true;
         kart.applyBoost(MUSHROOM_BOOST, MUSHROOM_STRENGTH);
         break;
 
       case ItemKind.Star:
+        ctx.bus.emit({ type: 'item-use', kart, kind });
+        announced = true;
         kart.starTime = Math.max(kart.starTime, STAR_TIME);
         kart.applyBoost(0.8, 1.2);
         break;
 
       case ItemKind.Bolt:
+        ctx.bus.emit({ type: 'item-use', kart, kind });
+        announced = true;
         this.fireBolt(kart);
         break;
 
@@ -893,7 +919,7 @@ export class Items implements IItems {
         const carry = backwards && kind !== ItemKind.Bomb;
         const target = kind === ItemKind.RedShell && !carry ? this.targetAhead(kart) : -1;
         const h = this.proj.spawn(kind, kart, backwards, carry, target);
-        if (h < 0) return false;
+        if (h < 0) return refuse();
         if (carry) s.carried = h;
         break;
       }
@@ -903,8 +929,8 @@ export class Items implements IItems {
         break;
     }
 
-    if (!consumed) return false;
-    ctx.bus.emit({ type: 'item-use', kart, kind });
+    if (!consumed) return refuse();
+    if (!announced) ctx.bus.emit({ type: 'item-use', kart, kind });
 
     s.count--;
     if (s.count <= 0) {
@@ -1055,6 +1081,7 @@ export class Items implements IItems {
     for (let i = 0; i < this.boxes.length; i++) {
       const b = this.boxes[i];
 
+      if (b.thunk > 0) b.thunk -= dt;
       if (b.down > 0) {
         b.down -= dt;
         if (b.down <= 0) b.scale = 0.001;
@@ -1071,12 +1098,25 @@ export class Items implements IItems {
           _v.y = 0;
           if (_v.lengthSq() > BOX_PICKUP_R * BOX_PICKUP_R) continue;
           const s = this.slot(k);
-          if (s.kind !== ItemKind.None || s.carried >= 0) continue;
+          if (s.kind !== ItemKind.None || s.carried >= 0) {
+            if (b.thunk <= 0) {
+              this.ctx.bus.emit({
+                type: 'item-box-break', kart: k,
+                x: b.pos.x, y: b.pos.y, z: b.pos.z, full: true,
+              });
+              b.thunk = 0.5;
+            }
+            continue;
+          }
           // A client takes the box down for the look of it, and stops there.
           // WHICH item this kart just won is the host's decision and lands in
           // the next snapshot ~40 ms later; rolling one here as well would deal
           // a second, different item and flash the wrong glyph on the HUD until
           // the authority contradicted it.
+          this.ctx.bus.emit({
+            type: 'item-box-break', kart: k,
+            x: b.pos.x, y: b.pos.y, z: b.pos.z, full: false,
+          });
           if (this.netDisplayOnly) this.ctx.bus.emit({ type: 'item-pickup', kart: k });
           else this.pickup(k);
           b.down = BOX_RESPAWN;
@@ -1178,14 +1218,16 @@ export class Items implements IItems {
       const scale = k.object.scale.x || 1;
       for (let i = 0; i < s.count && n < 24; i++) {
         const a = now * 2.1 + (i / Math.max(1, s.count)) * Math.PI * 2;
-        const r = 1.55 * scale;
+        const r = 1.65 * scale;
         _v2.set(
           k.position.x + Math.sin(a) * r,
-          k.position.y + 0.42 * scale + Math.sin(now * 3.2 + i) * 0.06,
+          k.position.y + 0.52 * scale + Math.sin(now * 3.2 + i) * 0.06,
           k.position.z + Math.cos(a) * r,
         );
         _q.setFromAxisAngle(UP, -a);
-        _s.setScalar(0.95 * scale);
+        // leftover cans pop bigger so "two left" is a fact on the kart
+        const leftover = 0.88 + 0.10 * (3 - s.count);
+        _s.setScalar((1.05 + leftover * 0.08) * scale);
         _m.compose(_v2, _q, _s);
         this.orbitMesh.setMatrixAt(n++, _m);
       }

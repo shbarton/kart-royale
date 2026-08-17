@@ -1325,6 +1325,26 @@ export class Audio implements System {
       case 'item-use':
         this.itemUse(e.kart, e.kind);
         break;
+      case 'item-refuse':
+        if (e.kart.isPlayer) {
+          const d = this.dest(e.kart);
+          if (d) this.blip(d, 180, 0.08, 0.12, 'square');
+        }
+        break;
+      case 'item-box-break':
+        if (e.kart.isPlayer) {
+          const d = this.dest(e.kart);
+          if (!d) break;
+          if (e.full) this.blip(d, 140, 0.07, 0.14, 'triangle');
+          else this.glassShatter(d);
+        }
+        break;
+      case 'item-bounce':
+        if (this.gate('bounce', 0.08)) {
+          const d = this.synth?.sfx;
+          if (d) this.blip(d, 980, 0.05, 0.1, 'triangle', 1400);
+        }
+        break;
       case 'hit':
         this.itemHit(e.kart, e.kind);
         break;
@@ -1363,19 +1383,22 @@ export class Audio implements System {
         break;
       case ItemKind.Banana:
         this.plop(d);
+        this.whoosh(d, 0.16, 0.12, false);
         break;
       case ItemKind.Bomb:
-        this.whoosh(d, 0.34, 0.32, true);
+        this.whoosh(d, 0.42, 0.38, true);
+        this.blip(d, 220, 0.12, 0.14, 'sawtooth', 90);
         break;
       case ItemKind.Star:
         this.starJingle(d);
+        this.whoosh(d, 0.4, 0.22, true);
         break;
       case ItemKind.Bolt:
-        this.zap(d, true);
+        this.thunder(d);
         break;
       case ItemKind.Mushroom:
       case ItemKind.TripleMushroom:
-        this.blip(d, 660, 0.07, 0.16, 'triangle');
+        this.canDump(d);
         break;
       default:
         this.blip(d, 520, 0.06, 0.1);
@@ -1687,27 +1710,32 @@ export class Audio implements System {
   private shellFire(dest: AudioNode, homing: boolean) {
     const s = this.synth!;
     const t = s.now;
-    this.whoosh(dest, 0.26, 0.3, true);
-    // spinning shell: a fast vibrato on a bright tone
-    const o = s.osc('square', homing ? 520 : 430);
+    // Pew: a short crack plus a falling whistle. Not a spinning shell.
+    this.whoosh(dest, 0.16, 0.34, true);
+    const n = s.noise('crackle', false, 1.2);
+    const ng = s.gain(EPS);
+    const hp = s.biquad('highpass', 900, 0.8);
+    n.connect(hp);
+    hp.connect(ng);
+    ng.connect(dest);
+    s.perc(ng.gain, t, 0.28, 0.001, 0.07);
+    n.start(t, Math.random());
+    n.stop(t + 0.12);
+    s.retire(n, hp, ng);
+
+    const o = s.osc('square', homing ? 680 : 520);
     const g = s.gain(EPS);
-    const bp = s.biquad('bandpass', 1600, 2.4);
+    const bp = s.biquad('bandpass', homing ? 1400 : 1100, 1.8);
     o.connect(bp);
     bp.connect(g);
     g.connect(dest);
-    const lfo = s.osc('sine', 22);
-    const lfoG = s.gain(homing ? 90 : 55);
-    lfo.connect(lfoG);
-    lfoG.connect(o.frequency);
-    o.frequency.setValueAtTime(homing ? 520 : 430, t);
-    o.frequency.exponentialRampToValueAtTime(homing ? 900 : 620, t + 0.3);
-    s.perc(g.gain, t, 0.24, 0.008, 0.34);
+    o.frequency.setValueAtTime(homing ? 680 : 520, t);
+    o.frequency.exponentialRampToValueAtTime(homing ? 280 : 220, t + 0.18);
+    s.perc(g.gain, t, 0.26, 0.004, 0.2);
     o.start(t);
-    lfo.start(t);
-    o.stop(t + 0.45);
-    lfo.stop(t + 0.45);
-    s.retire(o, bp, g, lfoG);
-    s.retire(lfo);
+    o.stop(t + 0.28);
+    s.retire(o, bp, g);
+    if (homing) this.blip(dest, 980, 0.08, 0.12, 'triangle', 1400, 0.02);
   }
 
   private plop(dest: AudioNode) {
@@ -1838,6 +1866,29 @@ export class Audio implements System {
     for (let i = 0; i < notes.length; i++) {
       this.blip(dest, mtof(notes[i]), 0.14, 0.16, 'triangle', 0, i * 0.055);
     }
+  }
+
+  /** Compressed-air dump — a can, not a UI blip. */
+  private canDump(dest: AudioNode) {
+    this.whoosh(dest, 0.28, 0.36, true);
+    this.blip(dest, 420, 0.12, 0.18, 'sawtooth', 180);
+    this.blip(dest, 880, 0.08, 0.12, 'triangle', 0, 0.04);
+  }
+
+  /** Cartoon thunder for the squall. */
+  private thunder(dest: AudioNode) {
+    this.zap(dest, true);
+    this.whoosh(dest, 0.55, 0.4, false);
+    this.blip(dest, 70, 0.28, 0.22, 'sine', 40);
+  }
+
+  /** Sea-glass smash when a box breaks. */
+  private glassShatter(dest: AudioNode) {
+    this.whoosh(dest, 0.12, 0.16, true);
+    this.blip(dest, 1680, 0.06, 0.14, 'triangle', 2400);
+    this.blip(dest, 2210, 0.05, 0.1, 'triangle', 0, 0.03);
+    this.tick(dest, 0.01, 0.12);
+    this.tick(dest, 0.04, 0.08);
   }
 
   private lapChime(dest: AudioNode, final: boolean) {

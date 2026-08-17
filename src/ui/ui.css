@@ -1207,6 +1207,58 @@ html[data-touch] .kr-charge-e {
   100% { transform: scale(1) rotate(0deg); }
 }
 
+/* Spent: the icon punches, flashes its tint, and flies toward the track. */
+.kr-item.spend .kr-item-frame {
+  filter: var(--plate-shadow)
+          drop-shadow(0 0 2.4vmin color-mix(in srgb, var(--item-tint, #fff) 90%, transparent));
+}
+.kr-item-icon.spend { animation: kr-itemSpend 0.32s var(--e-out) both; }
+@keyframes kr-itemSpend {
+  0%   { transform: scale(1.22) rotate(-6deg); opacity: 1; filter: brightness(1.5); }
+  45%  { transform: scale(1.08) translate(8%, -18%) rotate(4deg); opacity: 1; }
+  100% { transform: scale(0.55) translate(22%, -40%) rotate(12deg); opacity: 0; }
+}
+.kr-item-count.tick { animation: kr-countTick 0.28s var(--e-spring) both; }
+@keyframes kr-countTick {
+  0%   { transform: scale(1.45); }
+  100% { transform: scale(1); }
+}
+
+/* Dead press: nuh-uh shake. On the frame, not the wrap — the wrap's
+   transform is owned by the touch layout. */
+.kr-item.refuse .kr-item-frame { animation: kr-itemRefuse 0.28s var(--e-out) both; }
+@keyframes kr-itemRefuse {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-6%) rotate(-3deg); }
+  40%      { transform: translateX(6%) rotate(3deg); }
+  60%      { transform: translateX(-4%) rotate(-2deg); }
+  80%      { transform: translateX(3%) rotate(1deg); }
+}
+
+/* Box smash: "?" flies into the plate. */
+.kr-item-q {
+  position: absolute;
+  inset: 12%;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: 2.4em;
+  color: #ffe7a0;
+  text-shadow: 0 0 0.4em rgba(255, 210, 80, 0.8);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 2;
+}
+.kr-item.smash .kr-item-q { animation: kr-qFly 0.45s var(--e-out) both; }
+.kr-item.smash .kr-item-frame {
+  filter: var(--plate-shadow) drop-shadow(0 0 2vmin rgba(255, 215, 120, 0.85));
+}
+@keyframes kr-qFly {
+  0%   { opacity: 1; transform: scale(1.8) translate(40%, -80%) rotate(-18deg); }
+  55%  { opacity: 1; transform: scale(1.15) translate(0, 0) rotate(6deg); }
+  100% { opacity: 0; transform: scale(0.4) rotate(0deg); }
+}
+
 .kr-item-count {
   position: absolute;
   right: -2%;

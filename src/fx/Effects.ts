@@ -135,6 +135,11 @@ const C_SMOKE_DARK = new THREE.Color(0x64656e);
 const C_WATER = new THREE.Color(0xbfe6ff);
 const C_FOAM = new THREE.Color(0xeefaff);
 const C_GOLD = new THREE.Color(0xffd36b);
+const C_CAN = new THREE.Color(0xff8a3d);
+const C_TRACER = new THREE.Color(0x5fd463);
+const C_LEMON = new THREE.Color(0xffd447);
+const C_MINE = new THREE.Color(0xe0453f);
+const C_STORM = new THREE.Color(0x8fa2c6);
 const C_SUNMOTE = new THREE.Color(0xffe2b4);
 const C_SPARK_WHITE = new THREE.Color(0xfff4e0);
 const C_DEBRIS = new THREE.Color(0x3a3530);
@@ -1156,6 +1161,8 @@ class KartFx {
    * the payoff half of the loop being invisible, and it was a one-line bug.
    */
   boostTier = 1;
+  /** seconds a turbo-can owns the boost colour, so it stays orange not blue */
+  canBoost = 0;
   wasBoosting = false;
   stunPhase = 0;
   /** squash-and-stretch: signed impulse plus its velocity, a critically-ish
@@ -1224,6 +1231,12 @@ export class Effects implements System {
   private readonly sprays: THREE.Vector3[] = [];
   private sprayAcc = 0;
   private lastState: RaceState = RaceState.Menu;
+  /** leftover rain / sky flash after a squall */
+  private squallT = 0;
+  private readonly squallAt = new THREE.Vector3();
+  /** trail handle per live projectile id */
+  private readonly flightTrail: number[] = [];
+  private readonly flightSeen: boolean[] = [];
 
   private readonly sunColor = new THREE.Color(0xffd9a8);
   private readonly skyColor = new THREE.Color(0xa8c8ff);
@@ -1261,7 +1274,7 @@ export class Effects implements System {
     this.particles.setLighting(ctx.sunDirection, this.sunColor, this.skyColor, this.bounceColor);
     this.particles.resize(ctx.width, ctx.height);
 
-    this.trails = new Trails(16, true);
+    this.trails = new Trails(24, true);
     // Quality-scaled, and it matters more than it looks: every quad in this ring
     // is a blended, texture-fetching fragment lying flat on the road, so the
     // capacity is a direct multiplier on mobile fill rate in the worst case
@@ -1556,9 +1569,16 @@ export class Effects implements System {
         break;
       }
 
-      case 'boost':
+      case 'boost': {
+        const fx = this.state(e.kart);
+        if (fx.canBoost > 0) {
+          // turbo can already fired an orange ignition this press
+          fx.boostTier = Math.max(fx.boostTier, 2);
+          break;
+        }
         this.boostFlash(e.kart, e.tier, now);
         break;
+      }
 
       case 'hop': {
         const fx = this.state(e.kart);
@@ -1604,19 +1624,24 @@ export class Effects implements System {
         this.sparkleBurst(e.kart.position, e.kart.stats.color, 18);
         break;
 
+      case 'item-refuse':
+        if (e.kart.isPlayer) this.ctx.shake(0.08, 0.12);
+        break;
+
+      case 'item-box-break':
+        this.boxBreak(e.kart, e.x, e.y, e.z, e.full, now);
+        break;
+
+      case 'item-bounce':
+        this.bulletPing(e.x, e.y, e.z, e.kind);
+        break;
+
       case 'coin':
         this.sparkleBurst(e.kart.position, C_GOLD, 12);
         break;
 
       case 'item-use':
-        if (e.kind === ItemKind.Star) {
-          _p.copy(e.kart.position); _p.y = this.state(e.kart).groundY + 0.35;
-          this.rings.spawn(_p, UP, 0.6, 6.0, 0.34, 0.06, C_GOLD, 1.3, now,
-            e.kart.velocity, 1.6);
-          this.sparkleBurst(e.kart.position, C_GOLD, 30);
-        } else if (e.kind === ItemKind.Mushroom || e.kind === ItemKind.TripleMushroom) {
-          this.boostFlash(e.kart, 1, now);
-        }
+        this.itemUsed(e.kart, e.kind, now);
         break;
 
       case 'hit': {
@@ -1624,10 +1649,19 @@ export class Effects implements System {
         this.addSquash(e.kart, e.kind === ItemKind.Bolt ? -0.55 : -0.35);
         if (e.kind === ItemKind.Bomb) {
           _p.copy(e.kart.position); _p.y += 0.5;
-          this.explode(_p, fx.groundN, fx.groundY, 1, now);
+          this.harbourBlast(_p, fx.groundN, fx.groundY, 1, now);
+        } else if (e.kind === ItemKind.Banana) {
+          _p.copy(e.kart.position); _p.y += 0.55;
+          this.lemonSplat(_p, fx.groundN, now);
+          if (e.kart.isPlayer) this.ctx.shake(0.4, 0.28);
+        } else if (e.kind === ItemKind.GreenShell || e.kind === ItemKind.RedShell) {
+          _p.copy(e.kart.position); _p.y += 0.55;
+          this.bulletHit(_p, e.kind === ItemKind.RedShell);
+          this.impactBurst(_p, fx.groundN, now, 0.7);
+          if (e.kart.isPlayer) this.ctx.shake(0.45, 0.32);
         } else {
           _p.copy(e.kart.position); _p.y += 0.55;
-          this.impactBurst(_p, fx.groundN, now, e.kind === ItemKind.Banana ? 0.55 : 1);
+          this.impactBurst(_p, fx.groundN, now, 1);
           if (e.kart.isPlayer) this.ctx.shake(0.45, 0.32);
         }
         break;
@@ -1931,6 +1965,8 @@ export class Effects implements System {
     this.lights.end(dt);
 
     this.updateAmbient(ctx, dt, now);
+    this.updateFlights(ctx, dt, now);
+    this.updateSquall(ctx, dt, now);
     this.updateSignals(ctx, dt);
   }
 
@@ -2205,6 +2241,8 @@ export class Effects implements System {
     // for a boost taken from a standstill.
     let fovTarget = boost * 8.5 + want * 4.2;
     if (k.driftTier > 0 && !boost) fovTarget = Math.max(fovTarget, 1.1 * k.driftTier);
+    if (k.starTime > 0) fovTarget = Math.max(fovTarget, 6.2);
+    if (this.squallT > 1.4) fovTarget = Math.max(fovTarget, 3.5);
     if (k.stunTime > 0) fovTarget = -3;
     const rate = fovTarget > this.signalFov ? 12 : 4.5;
     this.signalFov += (fovTarget - this.signalFov) * Math.min(1, dt * rate);
@@ -2319,6 +2357,7 @@ export class Effects implements System {
       // out of range would silently swallow that kart's next ignition when it
       // came back. A one-line decay costs nothing and keeps the state honest.
       fx.igniteT = Math.max(0, fx.igniteT - dt);
+      fx.canBoost = Math.max(0, fx.canBoost - dt);
       fx.tierFlash = Math.max(0, fx.tierFlash - dt);
       if (k.boostTime <= 0) fx.boostTier = 1;
       return;
@@ -2577,6 +2616,8 @@ export class Effects implements System {
     // --- boost: plume, trail, glow ----------------------------------------
     const boosting = k.boostTime > 0;
     fx.igniteT = Math.max(0, fx.igniteT - dt);
+    fx.canBoost = Math.max(0, fx.canBoost - dt);
+    if (fx.canBoost > 0) fx.boostTier = Math.max(fx.boostTier, 2);
     if (boosting) {
       // The tier the boost was CASHED FROM, latched on the event — not
       // `k.driftTier`, which Kart.releaseDrift has already zeroed by the time
@@ -2812,15 +2853,14 @@ export class Effects implements System {
     // orbit of sparks with no rigid boundary, a hue-cycling pool on the road,
     // and a coloured lamp that puts the cycle onto the kart's own bodywork.
     if (k.starTime > 0) {
-      fx.starAcc += dt * 58 * lod * this.emitScale;
+      fx.starAcc += dt * 72 * lod * this.emitScale;
       const n = Math.floor(fx.starAcc);
       if (n > 0) { fx.starAcc -= n; this.starSparkle(k, fx, n, now); }
-      _col.setHSL((now * 0.55 + k.id * 0.13) % 1, 0.85, 0.60);
       if (dist < 50) {
-        _p.copy(k.position); _p.y = fx.groundY + 0.75;
+        _p.copy(k.position); _p.y = fx.groundY + 1.05;
         this.lights.request(
-          2000 + k.id, (k.isPlayer ? 170 : 50) - dist * 0.05, _p, _col,
-          0.85 * (1 - dist / 50) * this.gain, 7.0);
+          2000 + k.id, (k.isPlayer ? 240 : 80) - dist * 0.05, _p, C_GOLD,
+          1.15 * (1 - dist / 50) * this.gain, 9.0);
       }
     } else {
       fx.starAcc = 0;
@@ -3985,47 +4025,50 @@ export class Effects implements System {
   }
 
   /**
-   * The star husk, made of light instead of geometry: sparks struck around the
-   * chassis on a rising helix, plus a hue-cycling pool on the road. Nothing
-   * here has a silhouette, so nothing can intersect the kart.
+   * Golden hour: you ARE the sunset. Gold dust, a sun disc above the roll bar,
+   * a warm pool on the road. No rainbow hoop, no hue cycle.
    */
   private starSparkle(k: IKart, fx: KartFx, n: number, now: number) {
-    const h = (now * 0.55 + k.id * 0.13) % 1;
-    _col.setHSL(h, 0.85, 0.62);
-    _col2.setHSL((h + 0.12) % 1, 0.9, 0.7);
-
     const p = this.particles.reset();
     p.tile = PTile.Star; p.mode = PMode.Billboard;
-    p.life = 0.55; p.lifeJitter = 0.4;
-    p.size0 = 0.22; p.size1 = 0.03; p.sizeJitter = 0.45;
-    p.gravity = -1.2; p.drag = 2.6; p.spin = 2.4;
-    p.velJitter = 1.1; p.fadeIn = 0.05; p.count = 1;
+    p.life = 0.62; p.lifeJitter = 0.35;
+    p.size0 = 0.28; p.size1 = 0.04; p.sizeJitter = 0.4;
+    p.gravity = -0.8; p.drag = 2.2; p.spin = 2.4;
+    p.velJitter = 1.0; p.fadeIn = 0.04; p.count = 1;
     this.particles.ground(fx.groundY, fx.groundN, 0.3, 0.14);
-    this.particles.colorA(_col, 1.9, 1);
-    this.particles.colorB(C_HOT, 0.7, 0);
-    // Emission points ride a helix around the chassis. The particles barely
-    // move; the *source* orbits, which is what reads as a shimmering husk.
+    this.particles.colorA(C_GOLD, 2.2, 1);
+    this.particles.colorB(C_HOT, 0.8, 0);
     for (let i = 0; i < n; i++) {
-      const a = now * 6.5 + (i / Math.max(1, n)) * Math.PI * 2 + k.id;
-      const rise = ((now * 1.3 + i * 0.37) % 1);
-      const r = 0.62 + 0.16 * Math.sin(a * 2.0);
+      const a = now * 5.8 + (i / Math.max(1, n)) * Math.PI * 2 + k.id;
+      const rise = ((now * 1.1 + i * 0.37) % 1);
+      const r = 0.70 + 0.18 * Math.sin(a * 2.0);
       this.particles.at(
         k.position.x + Math.cos(a) * r,
-        k.position.y - 0.12 + rise * 1.05,
+        k.position.y - 0.08 + rise * 1.15,
         k.position.z + Math.sin(a) * r);
-      this.particles.vel(k.velocity.x * 0.6, k.velocity.y * 0.6 + 0.5, k.velocity.z * 0.6);
+      this.particles.vel(k.velocity.x * 0.6, k.velocity.y * 0.6 + 0.6, k.velocity.z * 0.6);
       this.particles.emitExact(true);
     }
 
-    // The pool on the road. Ground-aligned, so it has area and no edge.
-    p.tile = PTile.Glow; p.mode = PMode.Ground; p.spin = 1.2;
-    p.life = 0.26; p.size0 = 1.0; p.size1 = 2.1; p.sizeJitter = 0.2;
+    // Little sun sitting on the roll bar.
+    p.tile = PTile.Glow; p.mode = PMode.Billboard;
+    p.life = 0.18; p.size0 = 0.55; p.size1 = 0.85; p.sizeJitter = 0.1;
+    p.gravity = 0; p.drag = 4; p.velJitter = 0; p.count = 1; p.fadeIn = 0.02;
+    this.particles.at(k.position.x, k.position.y + 1.15, k.position.z);
+    this.particles.vel(k.velocity.x, k.velocity.y, k.velocity.z);
+    this.particles.colorA(C_HOT, 2.4, 0.95);
+    this.particles.colorB(C_GOLD, 1.2, 0);
+    this.particles.emitExact(true);
+
+    // Warm pool on the road.
+    p.tile = PTile.Glow; p.mode = PMode.Ground; p.spin = 0.8;
+    p.life = 0.28; p.size0 = 1.4; p.size1 = 2.8; p.sizeJitter = 0.15;
     p.gravity = 0; p.drag = 1.1; p.velJitter = 0; p.count = 1;
-    p.camBias = 0.07; p.softness = 0; p.fadeIn = 0.12;
+    p.camBias = 0.07; p.softness = 0; p.fadeIn = 0.08;
     this.particles.at(k.position.x, fx.groundY + 0.05, k.position.z);
     this.particles.vel(k.velocity.x * 0.8, 0, k.velocity.z * 0.8);
-    this.particles.colorA(_col2, 0.55, 0.45);
-    this.particles.colorB(_col, 0.14, 0);
+    this.particles.colorA(C_GOLD, 0.72, 0.55);
+    this.particles.colorB(C_SUNMOTE, 0.18, 0);
     this.particles.emitExact(true);
   }
 
@@ -4205,6 +4248,369 @@ export class Effects implements System {
       0.17, 0.16, 0.19);
     fx.skidL.copy(this.skidLRef);
     fx.skidR.copy(this.skidRRef);
+  }
+
+  // --- item receipts -------------------------------------------------------
+
+  private itemUsed(k: IKart, kind: ItemKind, now: number) {
+    const fx = this.state(k);
+    this.itemKick(k, kind);
+    switch (kind) {
+      case ItemKind.Mushroom:
+      case ItemKind.TripleMushroom:
+        fx.canBoost = 0.55;
+        fx.boostTier = 2;
+        fx.igniteT = 0;
+        this.canIgnite(k, now);
+        break;
+      case ItemKind.Star:
+        _p.copy(k.position); _p.y = fx.groundY + 0.4;
+        this.rings.spawn(_p, UP, 0.8, 8.5, 0.42, 0.05, C_GOLD, 1.6, now, k.velocity, 1.6);
+        this.sparkleBurst(k.position, C_GOLD, 42);
+        this.addSquash(k, 0.28);
+        if (k.isPlayer) this.igniteImpulse = Math.max(this.igniteImpulse, 0.85);
+        break;
+      case ItemKind.Bolt:
+        this.squallCast(k, now);
+        break;
+      case ItemKind.GreenShell:
+      case ItemKind.RedShell:
+        this.throwFlash(k, kind === ItemKind.RedShell ? C_MINE : C_TRACER, now);
+        this.addSquash(k, 0.18);
+        break;
+      case ItemKind.Banana:
+        this.lemonPlop(k, fx, now);
+        this.addSquash(k, -0.16);
+        break;
+      case ItemKind.Bomb:
+        this.throwFlash(k, C_MINE, now);
+        this.addSquash(k, -0.28);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** 2–4 frame camera / body receipt so a kid feels the press. */
+  private itemKick(k: IKart, kind: ItemKind) {
+    if (!k.isPlayer) return;
+    const heavy = kind === ItemKind.Bomb || kind === ItemKind.Bolt || kind === ItemKind.Star;
+    this.ctx.shake(heavy ? 0.28 : 0.16, heavy ? 0.22 : 0.16);
+    this.igniteImpulse = Math.max(this.igniteImpulse, heavy ? 0.55 : 0.32);
+  }
+
+  /** Orange can dump — not the blue drift-boost ignition. */
+  private canIgnite(k: IKart, now: number) {
+    const fx = this.state(k);
+    fx.igniteT = 0.32;
+    fx.boostTier = 2;
+    _fwd.copy(k.forward);
+    _q.copy(k.position); _q.y = fx.groundY + 0.32;
+    this.rings.spawn(_q, fx.groundN, 0.8, 7.2, 0.32, 0.055, C_CAN, 1.7, now, k.velocity, 1.6);
+    _q.y = fx.groundY + 0.95;
+    this.rings.spawn(_q, fx.groundN, 1.8, 10.5, 0.20, 0.04, C_CAN, 1.1, now, k.velocity, 1.2);
+
+    const p = this.particles.reset();
+    p.tile = PTile.Flame; p.mode = PMode.Billboard;
+    p.life = 0.28; p.lifeJitter = 0.3;
+    p.size0 = 0.28; p.size1 = 0.06; p.sizeJitter = 0.4;
+    p.gravity = 3; p.drag = 5; p.velJitter = 2.4; p.posJitter = 0.12;
+    p.fadeIn = 0.02; p.count = 14;
+    this.particles.ground(fx.groundY, fx.groundN, 0.4, 0.16);
+    this.stackMouth(k, 0, _p);
+    this.particles.at(_p.x, _p.y, _p.z);
+    this.particles.vel(k.velocity.x * 0.8 - _fwd.x * 4, k.velocity.y * 0.8 + 2, k.velocity.z * 0.8 - _fwd.z * 4);
+    this.particles.colorA(C_CAN, 2.3, 1);
+    this.particles.colorB(C_HOT, 0.7, 0);
+    this.particles.emit(true);
+
+    // crumpling can — orange debris spat backward
+    p.tile = PTile.Streak; p.mode = PMode.Stretch; p.stretch = 2.2;
+    p.life = 0.4; p.size0 = 0.16; p.size1 = 0.06; p.count = 8;
+    p.gravity = -8; p.drag = 1.4; p.velJitter = 4;
+    this.particles.colorA(C_CAN, 1.4, 1);
+    this.particles.colorB(new THREE.Color(0xc9420e), 0.8, 0.4);
+    this.particles.emit(false);
+
+    p.tile = PTile.Glow; p.mode = PMode.Ground;
+    p.life = 0.3; p.size0 = 1.6; p.size1 = 3.8; p.count = 1;
+    p.gravity = 0; p.drag = 0.7; p.velJitter = 0; p.fadeIn = 0.016;
+    this.particles.at(k.position.x, fx.groundY + 0.05, k.position.z);
+    this.particles.vel(k.velocity.x, 0, k.velocity.z);
+    this.particles.colorA(C_CAN, 1.05, 0.7);
+    this.particles.colorB(C_CAN, 0.2, 0);
+    this.particles.emit(true);
+
+    this.addSquash(k, 0.22);
+    if (k.isPlayer) {
+      this.igniteImpulse = Math.max(this.igniteImpulse, 0.95);
+      this.ctx.shake(0.22, 0.22);
+    }
+    this.blastLoad = Math.max(this.blastLoad, 0.45);
+  }
+
+  private throwFlash(k: IKart, col: THREE.Color, now: number) {
+    const fx = this.state(k);
+    _p.copy(k.position).addScaledVector(k.forward, 1.4);
+    _p.y += 0.45;
+    const p = this.particles.reset();
+    p.tile = PTile.Glow; p.mode = PMode.Billboard;
+    p.life = 0.22; p.size0 = 0.55; p.size1 = 1.4; p.sizeJitter = 0.2;
+    p.gravity = 0; p.drag = 4; p.count = 1; p.fadeIn = 0.01;
+    this.particles.at(_p.x, _p.y, _p.z);
+    this.particles.vel(k.velocity.x, 0, k.velocity.z);
+    this.particles.colorA(col, 2.0, 0.9);
+    this.particles.colorB(col, 0.4, 0);
+    this.particles.emit(true);
+    this.rings.spawn(_p, fx.groundN, 0.3, 2.4, 0.22, 0.07, col, 0.9, now, k.velocity, 1.2);
+  }
+
+  private lemonPlop(k: IKart, fx: KartFx, now: number) {
+    _p.copy(k.position).addScaledVector(k.forward, -1.4);
+    _p.y = fx.groundY + 0.08;
+    this.rings.spawn(_p, fx.groundN, 0.25, 2.2, 0.28, 0.08, C_LEMON, 0.85, now);
+    const p = this.particles.reset();
+    p.tile = PTile.Glow; p.mode = PMode.Ground;
+    p.life = 0.4; p.size0 = 0.8; p.size1 = 2.2; p.count = 1; p.fadeIn = 0.02;
+    this.particles.at(_p.x, fx.groundY + 0.04, _p.z);
+    this.particles.colorA(C_LEMON, 0.9, 0.7);
+    this.particles.colorB(C_LEMON, 0.15, 0);
+    this.particles.emit(true);
+    this.groundPuff(k, fx, 8, 0.55);
+  }
+
+  private lemonSplat(at: THREE.Vector3, n: THREE.Vector3, now: number) {
+    const p = this.particles.reset();
+    p.tile = PTile.Splash; p.mode = PMode.Billboard;
+    p.life = 0.55; p.lifeJitter = 0.3;
+    p.size0 = 0.18; p.size1 = 0.06; p.sizeJitter = 0.45;
+    p.gravity = -11; p.drag = 1.2; p.velJitter = 7; p.posJitter = 0.2;
+    p.count = 22;
+    this.particles.ground(at.y - 1.1, n, 0.3, 0.12);
+    this.particles.at(at.x, at.y, at.z);
+    this.particles.vel(0, 5, 0);
+    this.particles.colorA(C_LEMON, 1.6, 1);
+    this.particles.colorB(new THREE.Color(0xfff6b0), 0.8, 0);
+    this.particles.emit(true);
+
+    p.tile = PTile.Streak; p.mode = PMode.Stretch; p.stretch = 1.4;
+    p.life = 0.7; p.size0 = 0.22; p.size1 = 0.10; p.count = 6;
+    p.gravity = -14; p.spin = 8;
+    this.particles.colorA(C_LEMON, 1.2, 1);
+    this.particles.colorB(new THREE.Color(0xc98a10), 0.9, 0.5);
+    this.particles.emit(false);
+
+    this.rings.spawn(at, n, 0.3, 2.6, 0.3, 0.08, C_LEMON, 1.0, now);
+    _r.set(at.x, at.y - 0.4, at.z);
+    this.decals.blot(_r, n, 1.4, DecalTile.Smudge, now, 8, 0.55, 0.85, 0.72, 0.12);
+  }
+
+  private bulletHit(at: THREE.Vector3, homing: boolean) {
+    const col = homing ? C_MINE : C_TRACER;
+    const p = this.particles.reset();
+    p.tile = PTile.Core; p.mode = PMode.Stretch; p.stretch = 3.2;
+    p.life = 0.32; p.lifeJitter = 0.35;
+    p.size0 = 0.14; p.size1 = 0.02; p.sizeJitter = 0.4;
+    p.gravity = -6; p.drag = 1.4; p.velJitter = 10; p.posJitter = 0.1;
+    p.count = 18;
+    this.particles.at(at.x, at.y, at.z);
+    this.particles.vel(0, 3, 0);
+    this.particles.colorA(C_HOT, 2.6, 1);
+    this.particles.colorB(col, 1.0, 0);
+    this.particles.emit(true);
+    this.sparkleBurst(at, col, 8);
+  }
+
+  private bulletPing(x: number, y: number, z: number, kind: ItemKind) {
+    const col = kind === ItemKind.RedShell ? C_MINE : C_TRACER;
+    const p = this.particles.reset();
+    p.tile = PTile.Glow; p.mode = PMode.Billboard;
+    p.life = 0.14; p.size0 = 0.40; p.size1 = 1.0; p.count = 1; p.fadeIn = 0.01;
+    this.particles.at(x, y, z);
+    this.particles.colorA(C_HOT, 2.4, 1);
+    this.particles.colorB(col, 0.6, 0);
+    this.particles.emit(true);
+  }
+
+  private harbourBlast(at: THREE.Vector3, n: THREE.Vector3, groundY: number, scale: number, now: number) {
+    this.explode(at, n, groundY, scale, now);
+    const p = this.particles.reset();
+    p.tile = PTile.Splash; p.mode = PMode.Billboard;
+    p.life = 0.7; p.lifeJitter = 0.3;
+    p.size0 = 0.22 * scale; p.size1 = 0.08;
+    p.gravity = -10; p.drag = 1.0; p.velJitter = 10 * scale; p.posJitter = 0.3;
+    p.count = Math.round(28 * scale);
+    this.particles.at(at.x, at.y, at.z);
+    this.particles.vel(0, 8 * scale, 0);
+    this.particles.colorA(C_FOAM, 1.8, 1);
+    this.particles.colorB(C_WATER, 0.7, 0);
+    this.particles.emit(true);
+  }
+
+  private boxBreak(k: IKart, x: number, y: number, z: number, full: boolean, now: number) {
+    if (full) {
+      if (k.isPlayer) this.ctx.shake(0.06, 0.1);
+      return;
+    }
+    this.addSquash(k, -0.18);
+    if (k.isPlayer) {
+      this.ctx.shake(0.2, 0.16);
+      this.igniteImpulse = Math.max(this.igniteImpulse, 0.28);
+    }
+    const p = this.particles.reset();
+    p.tile = PTile.Streak; p.mode = PMode.Stretch; p.stretch = 2.0;
+    p.life = 0.42; p.lifeJitter = 0.3;
+    p.size0 = 0.18; p.size1 = 0.05; p.sizeJitter = 0.4;
+    p.gravity = -8; p.drag = 1.3; p.velJitter = 7;
+    p.posJitter = 0.25; p.count = 14;
+    this.particles.at(x, y, z);
+    this.particles.vel(k.velocity.x * 0.4, 4.5, k.velocity.z * 0.4);
+    this.particles.colorA(C_TRACER, 2.0, 1);
+    this.particles.colorB(C_GOLD, 0.8, 0);
+    this.particles.emit(true);
+
+    p.tile = PTile.Star; p.mode = PMode.Billboard; p.stretch = 0;
+    p.life = 0.5; p.size0 = 0.32; p.size1 = 0.08; p.count = 6;
+    p.gravity = 1.2; p.drag = 2.4; p.velJitter = 2;
+    this.particles.colorA(C_GOLD, 2.2, 1);
+    this.particles.colorB(C_HOT, 0.7, 0);
+    this.particles.emit(true);
+
+    _p.set(x, y, z);
+    this.rings.spawn(_p, UP, 0.3, 2.8, 0.28, 0.07, C_GOLD, 0.95, now, k.velocity, 1.2);
+  }
+
+  private squallCast(k: IKart, now: number) {
+    this.squallT = 1.8;
+    this.squallAt.copy(k.position);
+    const fx = this.state(k);
+    _p.copy(k.position); _p.y = fx.groundY + 0.4;
+    this.rings.spawn(_p, UP, 1.0, 10, 0.4, 0.05, C_STORM, 1.4, now, k.velocity, 1.4);
+    if (k.isPlayer) {
+      this.ctx.shake(0.42, 0.32);
+      this.igniteImpulse = Math.max(this.igniteImpulse, 0.9);
+    }
+    const race = this.ctx.race;
+    if (!race) return;
+    for (const o of race.karts) {
+      if (o === k || o.finished || o.starTime > 0) continue;
+      this.lightning(k.position, o.position);
+    }
+  }
+
+  private lightning(from: THREE.Vector3, to: THREE.Vector3) {
+    const p = this.particles.reset();
+    p.tile = PTile.Streak; p.mode = PMode.Stretch; p.stretch = 6;
+    p.life = 0.18; p.lifeJitter = 0.2;
+    p.size0 = 0.22; p.size1 = 0.04; p.count = 1;
+    p.gravity = 0; p.drag = 0.4; p.velJitter = 0; p.fadeIn = 0.005;
+    this.particles.colorA(C_HOT, 2.8, 1);
+    this.particles.colorB(C_GOLD, 1.4, 0);
+    const segs = 7;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const jx = (Math.random() - 0.5) * 1.4 * (i > 0 && i < segs ? 1 : 0);
+      const jz = (Math.random() - 0.5) * 1.4 * (i > 0 && i < segs ? 1 : 0);
+      this.particles.at(
+        from.x + (to.x - from.x) * t + jx,
+        from.y + 6 * (1 - t) + (to.y - from.y) * t + 0.6,
+        from.z + (to.z - from.z) * t + jz,
+      );
+      this.particles.emitExact(true);
+    }
+  }
+
+  private updateSquall(ctx: Ctx, dt: number, now: number) {
+    if (this.squallT <= 0) return;
+    this.squallT = Math.max(0, this.squallT - dt);
+    const u = this.squallT / 1.8;
+    if (u < 0.02) return;
+    const p = this.particles.reset();
+    p.tile = PTile.Splash; p.mode = PMode.Billboard;
+    p.life = 0.55; p.lifeJitter = 0.3;
+    p.size0 = 0.08; p.size1 = 0.04; p.sizeJitter = 0.4;
+    p.gravity = -18; p.drag = 0.4; p.velJitter = 2; p.posJitter = 6;
+    p.count = ctx.settings.quality <= Quality.Medium ? 6 : 12;
+    this.particles.at(this.squallAt.x, this.squallAt.y + 8, this.squallAt.z);
+    this.particles.vel(0, -12, 0);
+    this.particles.colorA(C_WATER, 1.2, 0.7 * u);
+    this.particles.colorB(C_STORM, 0.5, 0);
+    this.particles.emit(false);
+
+    if (u > 0.75) {
+      p.tile = PTile.Glow; p.mode = PMode.Billboard;
+      p.life = 0.12; p.size0 = 8; p.size1 = 14; p.count = 1;
+      p.gravity = 0; p.posJitter = 0; p.velJitter = 0;
+      this.particles.at(this.squallAt.x, this.squallAt.y + 4, this.squallAt.z);
+      this.particles.colorA(C_STORM, 0.55 * u, 0.35);
+      this.particles.colorB(C_STORM, 0.05, 0);
+      this.particles.emit(true);
+    }
+    void now;
+  }
+
+  private updateFlights(ctx: Ctx, _dt: number, now: number) {
+    const items = ctx.items;
+    const live = items?.flights;
+    for (let i = 0; i < this.flightSeen.length; i++) this.flightSeen[i] = false;
+    if (live) {
+      for (let i = 0; i < live.length; i++) {
+        const f = live[i];
+        while (this.flightSeen.length <= f.id) this.flightSeen.push(false);
+        this.flightSeen[f.id] = true;
+        let h = this.flightTrail[f.id];
+        if (h === undefined || h < 0) {
+          const col = f.kind === ItemKind.RedShell ? C_MINE
+            : f.kind === ItemKind.GreenShell ? C_TRACER
+              : f.kind === ItemKind.Bomb ? C_MINE
+                : C_LEMON;
+          const moving = !f.carried && (f.kind === ItemKind.GreenShell || f.kind === ItemKind.RedShell);
+          h = moving ? this.trails.acquire(0.42, col, 1.7, 0.85, 0.22, 0.28, 7) : -1;
+          this.flightTrail[f.id] = h;
+        }
+        if (h >= 0) this.trails.push(h, f.pos.x, f.pos.y + 0.08, f.pos.z);
+
+        if (f.kind === ItemKind.Bomb && !f.carried) {
+          const p = this.particles.reset();
+          p.tile = PTile.Core; p.mode = PMode.Billboard;
+          p.life = 0.18; p.size0 = 0.10; p.size1 = 0.02; p.count = 1;
+          p.gravity = -2; p.drag = 2; p.velJitter = 0.4; p.fadeIn = 0.02;
+          this.particles.at(f.pos.x, f.pos.y + 0.42, f.pos.z);
+          this.particles.vel(0, 1.4, 0);
+          this.particles.colorA(C_HOT, 2.4, 1);
+          this.particles.colorB(C_CAN, 0.8, 0);
+          this.particles.emit(true);
+        }
+
+        if (f.kind === ItemKind.RedShell && f.targetId >= 0 && !f.carried) {
+          const victim = ctx.race?.karts[f.targetId];
+          if (victim && !victim.finished) {
+            const p = this.particles.reset();
+            p.tile = PTile.Streak; p.mode = PMode.Stretch; p.stretch = 4;
+            p.life = 0.12; p.size0 = 0.10; p.size1 = 0.03; p.count = 1;
+            p.gravity = 0; p.drag = 0.5; p.fadeIn = 0.01;
+            this.particles.colorA(C_GOLD, 1.8, 0.85);
+            this.particles.colorB(C_GOLD, 0.4, 0);
+            for (let s = 1; s <= 4; s++) {
+              const t = s / 5;
+              this.particles.at(
+                f.pos.x + (victim.position.x - f.pos.x) * t,
+                f.pos.y + 0.2 + (victim.position.y - f.pos.y) * t,
+                f.pos.z + (victim.position.z - f.pos.z) * t,
+              );
+              this.particles.emitExact(true);
+            }
+          }
+        }
+      }
+    }
+    for (let id = 0; id < this.flightTrail.length; id++) {
+      if (this.flightTrail[id] >= 0 && !this.flightSeen[id]) {
+        this.trails.release(this.flightTrail[id]);
+        this.flightTrail[id] = -1;
+      }
+    }
+    void now;
   }
 
   // --- squash & stretch ----------------------------------------------------

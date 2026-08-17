@@ -241,6 +241,9 @@ export class HUD implements System {
   private rouletteT = -1;
   private rouletteNext = 0;
   private rouletteIdx = 0;
+  /** keep showing the spent icon for this many seconds after a press */
+  private spendT = -1;
+  private spendKind: ItemKind = ItemKind.None;
 
   // speedometer
   private speedWrap!: HTMLDivElement;
@@ -527,6 +530,7 @@ export class HUD implements System {
     this.itemCanvas = el('canvas', undefined, this.itemIcon);
     this.itemG = this.itemCanvas.getContext('2d')!;
     this.itemCount = el('div', 'kr-item-count', this.itemWrap, '×2');
+    el('div', 'kr-item-q', this.itemWrap, '?');
   }
 
   private buildSpeedo() {
@@ -600,6 +604,15 @@ export class HUD implements System {
         break;
       case 'item-pickup':
         if (e.kart === player) this.startRoulette();
+        break;
+      case 'item-use':
+        if (e.kart === player) this.spend(e.kind);
+        break;
+      case 'item-refuse':
+        if (e.kart === player) retrigger(this.itemWrap, 'refuse');
+        break;
+      case 'item-box-break':
+        if (e.kart === player && !e.full) retrigger(this.itemWrap, 'smash');
         break;
       case 'hit':
         if (e.kart === player) {
@@ -708,13 +721,30 @@ export class HUD implements System {
     this.itemWrap.classList.add('spinning');
   }
 
+  private spend(kind: ItemKind) {
+    this.spendKind = kind;
+    this.spendT = 0.28;
+    retrigger(this.itemWrap, 'spend');
+    retrigger(this.itemIcon, 'spend');
+    retrigger(this.itemCount, 'tick');
+  }
+
   private updateItem(ctx: Ctx, dt: number) {
     const player = ctx.race.player;
     const held = player ? ctx.items.held(player) : null;
     const kind = held ? held.kind : ItemKind.None;
     const count = held ? held.count : 0;
+    if (this.spendT >= 0) {
+      this.spendT -= dt;
+      if (this.spendT < 0) {
+        this.spendT = -1;
+        this.itemIcon.classList.remove('spend');
+        this.itemWrap.classList.remove('spend');
+      }
+    }
 
     let show = kind;
+    if (this.spendT >= 0 && this.spendKind !== ItemKind.None) show = this.spendKind;
     if (this.rouletteT >= 0) {
       this.rouletteT += dt;
       if (this.rouletteT >= this.rouletteNext) {
@@ -731,7 +761,7 @@ export class HUD implements System {
       }
     }
 
-    const held2 = kind !== ItemKind.None && this.rouletteT < 0;
+    const held2 = (kind !== ItemKind.None || this.spendT >= 0) && this.rouletteT < 0;
     this.itemWrap.classList.toggle('has-item', held2);
     // EMPTY IS A DIFFERENT STATE, VISIBLY. Round 1 drew the empty slot at full
     // opacity with a saturated gold diamond, identical in weight to a held
@@ -739,7 +769,7 @@ export class HUD implements System {
     // anything. Empty is now the item-box cube, ghosted and desaturated; the
     // full-weight, saturated, glowing plate means "you are holding something"
     // and nothing else. Gold is reserved for the position accent.
-    this.itemWrap.classList.toggle('empty', !held2 && this.rouletteT < 0);
+    this.itemWrap.classList.toggle('empty', !held2 && this.rouletteT < 0 && this.spendT < 0);
     this.itemWrap.classList.toggle('multi', count > 1);
     if (count > 1) setText(this.itemCount, '×' + count);
     setStyle(this.itemWrap, '--item-tint', ITEM_TINT[show] || '#ffffff');

@@ -1,9 +1,9 @@
 /**
  * ============================================================================
- *  PROJECTILES — shells, bananas, bob-ombs, and the toolkit that draws them
+ *  PROJECTILES — bullets, lemons, mines, and the toolkit that draws them
  * ============================================================================
- *  Everything here is procedural: the shells are solids of revolution with a
- *  painted albedo/roughness/normal set, the bananas are a tapered swept tube,
+ *  Everything here is procedural: the bullets are lathed cartridges with a
+ *  painted albedo/roughness/normal set, the lemons are a tapered swept tube,
  *  and the blasts are pooled additive shells. No file is loaded and nothing is
  *  allocated once `init` has run.
  *
@@ -299,25 +299,12 @@ export class BlobShadows {
 //  Shared item art
 // =============================================================================
 
-const SHELL_PROFILE: number[][] = [
-  [0.00, 0.300], [0.075, 0.294], [0.150, 0.276], [0.222, 0.243],
-  [0.286, 0.196], [0.334, 0.136], [0.362, 0.076], [0.374, 0.030],
-  [0.376, 0.004], [0.368, -0.022], [0.344, -0.052], [0.300, -0.078],
-  [0.230, -0.098], [0.140, -0.109], [0.060, -0.113], [0.00, -0.114],
-];
-
-const BOMB_PROFILE: number[][] = [
-  [0.000, 0.335], [0.062, 0.330], [0.108, 0.318], [0.128, 0.300],
-  [0.112, 0.286], [0.150, 0.262], [0.216, 0.216], [0.268, 0.150],
-  [0.296, 0.070], [0.300, 0.000], [0.288, -0.078], [0.246, -0.150],
-  [0.180, -0.204], [0.100, -0.234], [0.040, -0.244], [0.000, -0.246],
-];
-
-const MUSH_PROFILE: number[][] = [
-  [0.000, 0.300], [0.086, 0.294], [0.166, 0.272], [0.234, 0.232],
-  [0.278, 0.174], [0.296, 0.116], [0.298, 0.082], [0.286, 0.062],
-  [0.240, 0.052], [0.170, 0.048], [0.150, 0.036], [0.140, -0.010],
-  [0.152, -0.060], [0.170, -0.090], [0.120, -0.104], [0.000, -0.106],
+/** Fat Amalfi lemon — nipples at both poles, then laid on its side. */
+const LEMON_PROFILE: number[][] = [
+  [0.000, 0.268], [0.038, 0.262], [0.078, 0.242], [0.132, 0.188],
+  [0.178, 0.112], [0.202, 0.038], [0.210, 0.000], [0.202, -0.038],
+  [0.178, -0.112], [0.132, -0.188], [0.078, -0.242], [0.038, -0.262],
+  [0.000, -0.268],
 ];
 
 interface MatSet {
@@ -325,185 +312,199 @@ interface MatSet {
   mat: THREE.MeshPhysicalMaterial;
 }
 
-/** Painted shell: banded albedo, a spotted height field, spatially varying roughness. */
-function shellArt(base: string, rim: string, spot: string, glow: number, S = 256): MatSet {
+function mergeGeos(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  let base = 0;
+  for (const g of geos) {
+    if (!g.getAttribute('normal')) g.computeVertexNormals();
+    const p = g.getAttribute('position');
+    const n = g.getAttribute('normal');
+    const u = g.getAttribute('uv');
+    const ix = g.getIndex();
+    for (let i = 0; i < p.count; i++) {
+      pos.push(p.getX(i), p.getY(i), p.getZ(i));
+      if (n) nrm.push(n.getX(i), n.getY(i), n.getZ(i));
+      else nrm.push(0, 1, 0);
+      if (u) uv.push(u.getX(i), u.getY(i));
+      else uv.push(0, 0);
+    }
+    if (ix) {
+      for (let i = 0; i < ix.count; i++) idx.push(ix.getX(i) + base);
+    } else {
+      for (let i = 0; i < p.count; i++) idx.push(base + i);
+    }
+    base += p.count;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  out.setIndex(idx);
+  out.computeVertexNormals();
+  return out;
+}
+
+/**
+ * Fat arcade cartridge. Lathed around Y, nose at +Y, so `orient` can point
+ * the tip along travel with one `setFromUnitVectors(UP, dir)`.
+ *
+ * v on the texture: tip → ogive → brass case → rim → primer.
+ */
+const BULLET_PROFILE: number[][] = [
+  [0.000,  0.48], [0.045,  0.45], [0.095,  0.38], [0.145,  0.26],
+  [0.175,  0.14], [0.188,  0.04], [0.192, -0.18], [0.210, -0.26],
+  [0.168, -0.29], [0.155, -0.36], [0.070, -0.39], [0.000, -0.41],
+];
+
+function bulletArt(tip: string, glow: number, homing: boolean, S = 256): MatSet {
   const alb = pad(S);
   const rgh = pad(S);
   const g = alb.g;
-  // v runs along the lathe profile: dome, then rim band, then belly
+  // v=0 is the nose
   const grd = g.createLinearGradient(0, 0, 0, S);
-  grd.addColorStop(0.00, base);
-  grd.addColorStop(0.42, base);
-  grd.addColorStop(0.52, rim);
-  grd.addColorStop(0.62, '#f6ead2');
-  grd.addColorStop(1.00, '#e4d3b6');
+  grd.addColorStop(0.00, '#fff4e0');
+  grd.addColorStop(0.08, tip);
+  grd.addColorStop(0.28, tip);
+  grd.addColorStop(0.34, '#3a2a12');
+  grd.addColorStop(0.40, '#f0d78a');
+  grd.addColorStop(0.78, '#c9962a');
+  grd.addColorStop(0.86, '#8a6a22');
+  grd.addColorStop(0.90, '#e8d090');
+  grd.addColorStop(1.00, '#6a5420');
   g.fillStyle = grd;
   g.fillRect(0, 0, S, S);
 
-  // hex plates on the dome, wrapped in u
+  if (homing) {
+    g.fillStyle = '#e0a93a';
+    g.fillRect(0, S * 0.36, S, S * 0.07);
+    g.fillStyle = '#5a3a10';
+    g.fillRect(0, S * 0.36, S, S * 0.012);
+    g.fillRect(0, S * 0.418, S, S * 0.012);
+  }
+
+  const sheen = g.createLinearGradient(0, 0, S, 0);
+  sheen.addColorStop(0.00, 'rgba(255,255,255,0)');
+  sheen.addColorStop(0.35, 'rgba(255,255,255,0.38)');
+  sheen.addColorStop(0.55, 'rgba(255,255,255,0)');
+  g.fillStyle = sheen;
+  g.fillRect(0, 0, S, S);
+
   const height = new Float32Array(S * S);
-  const cells: [number, number, number][] = [];
-  for (let row = 0; row < 4; row++) {
-    const cols = 6;
-    for (let col = 0; col < cols; col++) {
-      const u = ((col + (row & 1 ? 0.5 : 0)) / cols) * S;
-      const v = (0.06 + row * 0.105) * S;
-      cells.push([u, v, S * (0.052 - row * 0.006)]);
+  for (let y = 0; y < S; y++) {
+    const v = y / S;
+    const groove = (v > 0.32 && v < 0.38) || (v > 0.86 && v < 0.92) ? -0.55 : 0;
+    for (let x = 0; x < S; x++) {
+      height[y * S + x] = groove + Math.cos((x / S) * Math.PI * 8) * 0.04;
     }
   }
-  g.globalAlpha = 0.85;
-  g.fillStyle = spot;
-  for (const [u, v, r] of cells) {
-    for (const off of [-S, 0, S]) {
-      g.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + 0.26;
-        const x = u + off + Math.cos(a) * r;
-        const y = v + Math.sin(a) * r * 0.82;
-        i ? g.lineTo(x, y) : g.moveTo(x, y);
-      }
-      g.closePath();
-      g.fill();
-    }
-  }
-  g.globalAlpha = 1;
 
-  // a bright specular sheen band near the crown, so the lacquer reads
-  const sh = g.createLinearGradient(0, 0, 0, S * 0.4);
-  sh.addColorStop(0, 'rgba(255,255,255,0.30)');
-  sh.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = sh;
-  g.fillRect(0, 0, S, S * 0.4);
-
-  // height field: plates proud of the shell, rim groove recessed
-  for (const [u, v, r] of cells) {
-    for (const off of [-S, 0, S]) {
-      const cx = u + off, cy = v;
-      const r2 = r * r;
-      for (let y = Math.max(0, Math.floor(cy - r)); y < Math.min(S, cy + r); y++) {
-        for (let x = Math.floor(cx - r); x < cx + r; x++) {
-          const xx = ((x % S) + S) % S;
-          const dx = x - cx, dy = (y - cy) / 0.82;
-          const d2 = dx * dx + dy * dy;
-          if (d2 > r2) continue;
-          height[y * S + xx] = Math.max(height[y * S + xx], 1 - Math.sqrt(d2 / r2));
-        }
-      }
-    }
-  }
-  for (let y = Math.floor(S * 0.5); y < S * 0.56; y++) {
-    for (let x = 0; x < S; x++) height[y * S + x] -= 0.6;
-  }
-
-  // roughness: polished dome, matte belly, a scuffed band where it lands
   const rg = rgh.g.createLinearGradient(0, 0, 0, S);
   rg.addColorStop(0.00, '#3a3a3a');
-  rg.addColorStop(0.45, '#2e2e2e');
-  rg.addColorStop(0.58, '#7a7a7a');
-  rg.addColorStop(1.00, '#a8a8a8');
+  rg.addColorStop(0.30, '#4a4a4a');
+  rg.addColorStop(0.40, '#1c1c1c');
+  rg.addColorStop(0.85, '#2a2a2a');
+  rg.addColorStop(1.00, '#5a5a5a');
   rgh.g.fillStyle = rg;
   rgh.g.fillRect(0, 0, S, S);
-  rgh.g.globalAlpha = 0.35;
-  for (let i = 0; i < 260; i++) {
-    const x = Math.random() * S;
-    const y = Math.random() * S;
-    const r = 1 + Math.random() * 5;
-    rgh.g.fillStyle = Math.random() > 0.5 ? '#c8c8c8' : '#141414';
-    rgh.g.beginPath();
-    rgh.g.arc(x, y, r, 0, Math.PI * 2);
-    rgh.g.fill();
-  }
-  rgh.g.globalAlpha = 1;
 
   const mat = new THREE.MeshPhysicalMaterial({
     map: padTexture(alb, true),
     roughnessMap: padTexture(rgh, false),
-    normalMap: normalFromHeight(height, S, 2.4),
-    normalScale: new THREE.Vector2(0.7, 0.7),
-    metalness: 0.0,
-    roughness: 1.0,
-    clearcoat: 1,
-    clearcoatRoughness: 0.07,
-    emissive: new THREE.Color(base),
+    normalMap: normalFromHeight(height, S, 1.8),
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    metalness: 0.72,
+    roughness: 0.35,
+    clearcoat: 0.45,
+    clearcoatRoughness: 0.18,
+    envMapIntensity: 1.35,
+    emissive: new THREE.Color(tip),
     emissiveIntensity: glow,
   });
-  return { geo: lathe(SHELL_PROFILE, 30), mat };
+  return { geo: lathe(BULLET_PROFILE, 24), mat };
 }
 
-function bananaArt(S = 128): MatSet {
+function lemonArt(S = 128): MatSet {
   const alb = pad(S);
   const g = alb.g;
-  // v runs along the sweep: brown stem, yellow body, brown nub
   const grd = g.createLinearGradient(0, 0, 0, S);
-  grd.addColorStop(0.00, '#6b4a24');
-  grd.addColorStop(0.10, '#c99a34');
-  grd.addColorStop(0.24, '#ffd447');
-  grd.addColorStop(0.55, '#ffe173');
-  grd.addColorStop(0.80, '#f3c53c');
-  grd.addColorStop(0.94, '#a8752c');
-  grd.addColorStop(1.00, '#5c3d1e');
+  grd.addColorStop(0.00, '#fff6b0');
+  grd.addColorStop(0.18, '#ffe56a');
+  grd.addColorStop(0.55, '#ffd447');
+  grd.addColorStop(0.88, '#e8a30c');
+  grd.addColorStop(1.00, '#9a6a10');
   g.fillStyle = grd;
   g.fillRect(0, 0, S, S);
-  // the two longitudinal ridges every banana has, plus a few freckles
-  const height = new Float32Array(S * S);
-  g.globalAlpha = 0.20;
-  for (const u of [0.16, 0.5, 0.84]) {
-    g.fillStyle = '#8a6522';
-    g.fillRect(u * S - 1.5, 0, 3, S);
-  }
-  g.globalAlpha = 0.30;
-  for (let i = 0; i < 40; i++) {
-    g.fillStyle = '#7a5520';
+  g.globalAlpha = 0.28;
+  g.fillStyle = '#fffce0';
+  g.fillRect(S * 0.42, 0, S * 0.08, S);
+  g.globalAlpha = 1;
+  for (let i = 0; i < 28; i++) {
+    g.fillStyle = 'rgba(180, 120, 20, 0.22)';
     g.beginPath();
-    g.arc(Math.random() * S, S * (0.2 + Math.random() * 0.6), 1 + Math.random() * 2, 0, Math.PI * 2);
+    g.arc(Math.random() * S, S * (0.15 + Math.random() * 0.7), 1 + Math.random() * 2, 0, Math.PI * 2);
     g.fill();
   }
-  g.globalAlpha = 1;
+
+  const height = new Float32Array(S * S);
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
       const u = x / S;
-      height[y * S + x] =
-        Math.cos((u - 0.16) * Math.PI * 2) * 0.12 + Math.cos((u - 0.5) * Math.PI * 6) * 0.05;
+      height[y * S + x] = 0.08 + Math.cos(u * Math.PI * 10) * 0.04;
     }
   }
   const rgh = pad(S);
   const rg = rgh.g.createLinearGradient(0, 0, 0, S);
-  rg.addColorStop(0, '#8c8c8c');
-  rg.addColorStop(0.5, '#4a4a4a');
-  rg.addColorStop(1, '#8c8c8c');
+  rg.addColorStop(0, '#6a6a6a');
+  rg.addColorStop(0.5, '#3a3a3a');
+  rg.addColorStop(1, '#6a6a6a');
   rgh.g.fillStyle = rg;
   rgh.g.fillRect(0, 0, S, S);
+
+  const body = lathe(LEMON_PROFILE, 22);
+  body.rotateZ(Math.PI * 0.5);
+  body.scale(1.15, 1.15, 1.15);
+  const leaf = new THREE.SphereGeometry(0.11, 8, 6);
+  leaf.scale(1.6, 0.18, 0.7);
+  leaf.rotateZ(-0.7);
+  leaf.translate(0.22, 0.16, 0);
 
   const mat = new THREE.MeshPhysicalMaterial({
     map: padTexture(alb, true),
     roughnessMap: padTexture(rgh, false),
-    normalMap: normalFromHeight(height, S, 1.6),
-    normalScale: new THREE.Vector2(0.55, 0.55),
+    normalMap: normalFromHeight(height, S, 1.4),
+    normalScale: new THREE.Vector2(0.4, 0.4),
     metalness: 0,
-    roughness: 1,
-    clearcoat: 0.85,
-    clearcoatRoughness: 0.16,
+    roughness: 0.42,
+    clearcoat: 0.7,
+    clearcoatRoughness: 0.22,
+    emissive: new THREE.Color(0xffc020),
+    emissiveIntensity: 0.08,
   });
-  return { geo: crescent(2.3, 0.46, 0.145, 22, 12), mat };
+  return { geo: mergeGeos([body, leaf]), mat };
 }
 
-function bombArt(S = 128): MatSet {
+function mineArt(S = 128): MatSet {
   const alb = pad(S);
   const g = alb.g;
   const grd = g.createLinearGradient(0, 0, 0, S);
-  grd.addColorStop(0.00, '#6a6f86');   // fuse cap, lighter so it reads
-  grd.addColorStop(0.12, '#3a4360');
-  grd.addColorStop(0.40, '#2b3350');
-  grd.addColorStop(1.00, '#1d2440');
+  grd.addColorStop(0.00, '#6d7a90');
+  grd.addColorStop(0.22, '#3a4860');
+  grd.addColorStop(0.48, '#e0453f');
+  grd.addColorStop(0.58, '#b8241c');
+  grd.addColorStop(0.68, '#2a3348');
+  grd.addColorStop(1.00, '#0b1220');
   g.fillStyle = grd;
   g.fillRect(0, 0, S, S);
-  // cast-iron pitting
   const height = new Float32Array(S * S);
-  for (let i = 0; i < 420; i++) {
+  for (let i = 0; i < 280; i++) {
     const x = Math.random() * S;
-    const y = S * (0.18 + Math.random() * 0.8);
+    const y = Math.random() * S;
     const r = 1 + Math.random() * 3;
-    g.globalAlpha = 0.16;
+    g.globalAlpha = 0.18;
     g.fillStyle = Math.random() > 0.5 ? '#0d1226' : '#57608a';
     g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
     const ri = Math.ceil(r);
@@ -514,87 +515,127 @@ function bombArt(S = 128): MatSet {
         if (py < 0 || py >= S) continue;
         const d = Math.hypot(dx, dy) / r;
         if (d > 1) continue;
-        height[py * S + px] -= (1 - d) * 0.5;
+        height[py * S + px] -= (1 - d) * 0.45;
       }
     }
   }
   g.globalAlpha = 1;
   const rgh = pad(S);
-  rgh.g.fillStyle = '#5e5e5e';
+  rgh.g.fillStyle = '#4a4a4a';
   rgh.g.fillRect(0, 0, S, S);
   rgh.g.fillStyle = '#2a2a2a';
-  rgh.g.fillRect(0, 0, S, S * 0.14);
-  const mat = new THREE.MeshPhysicalMaterial({
-    map: padTexture(alb, true),
-    roughnessMap: padTexture(rgh, false),
-    normalMap: normalFromHeight(height, S, 2.0),
-    normalScale: new THREE.Vector2(0.8, 0.8),
-    metalness: 0.55,
-    roughness: 1,
-    clearcoat: 0.4,
-    clearcoatRoughness: 0.35,
-  });
-  return { geo: lathe(BOMB_PROFILE, 26), mat };
-}
+  rgh.g.fillRect(0, S * 0.46, S, S * 0.12);
 
-export function mushroomArt(cap: string, spot: string, S = 128): MatSet {
-  const alb = pad(S);
-  const g = alb.g;
-  const grd = g.createLinearGradient(0, 0, 0, S);
-  grd.addColorStop(0.00, cap);
-  grd.addColorStop(0.44, cap);
-  grd.addColorStop(0.50, '#c8563f');
-  grd.addColorStop(0.56, '#f6e6c8');
-  grd.addColorStop(1.00, '#e8d3ac');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, S, S);
-  const height = new Float32Array(S * S);
-  const spots: [number, number, number][] = [
-    [0.12, 0.10, 0.075], [0.42, 0.07, 0.055], [0.68, 0.13, 0.07],
-    [0.90, 0.09, 0.05], [0.26, 0.28, 0.085], [0.58, 0.30, 0.075], [0.84, 0.31, 0.06],
+  const R = 0.38;
+  const parts: THREE.BufferGeometry[] = [new THREE.SphereGeometry(R, 20, 14)];
+  // six fat horns — the silhouette that says "mine"
+  const dirs: [number, number, number][] = [
+    [1, 0.35, 0], [-1, 0.35, 0], [0, 0.35, 1], [0, 0.35, -1],
+    [0.7, -0.55, 0.7], [-0.7, -0.55, -0.7],
   ];
-  g.fillStyle = spot;
-  for (const [u, v, r] of spots) {
-    for (const off of [-1, 0, 1]) {
-      g.beginPath();
-      g.ellipse((u + off) * S, v * S, r * S, r * S * 0.8, 0, 0, Math.PI * 2);
-      g.fill();
-      const cx = (u + off) * S, cy = v * S, rr = r * S;
-      for (let y = Math.max(0, Math.floor(cy - rr)); y < Math.min(S, cy + rr); y++) {
-        for (let x = Math.floor(cx - rr); x < cx + rr; x++) {
-          const xx = ((x % S) + S) % S;
-          const d = Math.hypot(x - cx, (y - cy) / 0.8) / rr;
-          if (d > 1) continue;
-          height[y * S + xx] = Math.max(height[y * S + xx], (1 - d) * 0.7);
-        }
-      }
-    }
+  for (const [x, y, z] of dirs) {
+    const len = Math.hypot(x, y, z) || 1;
+    const horn = new THREE.ConeGeometry(0.07, 0.22, 8);
+    horn.translate(0, R + 0.08, 0);
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(x / len, y / len, z / len),
+    );
+    horn.applyQuaternion(q);
+    parts.push(horn);
   }
-  const rgh = pad(S);
-  const rg = rgh.g.createLinearGradient(0, 0, 0, S);
-  rg.addColorStop(0, '#3c3c3c');
-  rg.addColorStop(0.5, '#585858');
-  rg.addColorStop(1, '#9a9a9a');
-  rgh.g.fillStyle = rg;
-  rgh.g.fillRect(0, 0, S, S);
+
   const mat = new THREE.MeshPhysicalMaterial({
     map: padTexture(alb, true),
     roughnessMap: padTexture(rgh, false),
     normalMap: normalFromHeight(height, S, 1.8),
-    normalScale: new THREE.Vector2(0.6, 0.6),
-    metalness: 0,
-    roughness: 1,
-    clearcoat: 1,
-    clearcoatRoughness: 0.1,
+    normalScale: new THREE.Vector2(0.7, 0.7),
+    metalness: 0.62,
+    roughness: 0.55,
+    clearcoat: 0.35,
+    clearcoatRoughness: 0.4,
+    envMapIntensity: 1.15,
+    emissive: new THREE.Color(0xc02018),
+    emissiveIntensity: 0.12,
   });
-  return { geo: lathe(MUSH_PROFILE, 26), mat };
+  return { geo: mergeGeos(parts), mat };
+}
+
+/** Stubby turbo can — chrome collar, orange lacquer, double chevron. */
+export function canArt(S = 128): MatSet {
+  const alb = pad(S);
+  const g = alb.g;
+  const grd = g.createLinearGradient(0, 0, 0, S);
+  grd.addColorStop(0.00, '#f4f8ff');
+  grd.addColorStop(0.16, '#8a96aa');
+  grd.addColorStop(0.22, '#ffc06b');
+  grd.addColorStop(0.55, '#ff8a3d');
+  grd.addColorStop(0.88, '#c9420e');
+  grd.addColorStop(1.00, '#6a2208');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, S, S);
+  // chevron decal
+  g.strokeStyle = '#fff6e0';
+  g.lineWidth = S * 0.055;
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  for (const u of [0.34, 0.58]) {
+    g.beginPath();
+    g.moveTo(u * S, S * 0.38);
+    g.lineTo((u + 0.22) * S, S * 0.55);
+    g.lineTo(u * S, S * 0.72);
+    g.stroke();
+  }
+
+  const height = new Float32Array(S * S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const v = y / S;
+      height[y * S + x] = v < 0.18 ? 0.35 : 0;
+    }
+  }
+  const rgh = pad(S);
+  const rg = rgh.g.createLinearGradient(0, 0, 0, S);
+  rg.addColorStop(0.00, '#1a1a1a');
+  rg.addColorStop(0.18, '#3a3a3a');
+  rg.addColorStop(0.22, '#4a4a4a');
+  rg.addColorStop(1.00, '#6a6a6a');
+  rgh.g.fillStyle = rg;
+  rgh.g.fillRect(0, 0, S, S);
+
+  const body = new THREE.CylinderGeometry(0.155, 0.168, 0.40, 20, 1, false);
+  const collar = new THREE.TorusGeometry(0.148, 0.022, 8, 18);
+  collar.rotateX(Math.PI * 0.5);
+  collar.translate(0, 0.20, 0);
+  const valve = new THREE.CylinderGeometry(0.045, 0.05, 0.07, 10);
+  valve.translate(0, 0.255, 0);
+
+  const mat = new THREE.MeshPhysicalMaterial({
+    map: padTexture(alb, true),
+    roughnessMap: padTexture(rgh, false),
+    normalMap: normalFromHeight(height, S, 1.4),
+    normalScale: new THREE.Vector2(0.45, 0.45),
+    metalness: 0.18,
+    roughness: 0.32,
+    clearcoat: 1,
+    clearcoatRoughness: 0.08,
+    envMapIntensity: 1.2,
+    emissive: new THREE.Color(0xff6a20),
+    emissiveIntensity: 0.10,
+  });
+  return { geo: mergeGeos([body, collar, valve]), mat };
+}
+
+/** @deprecated HUD/world now share the turbo can; kept so older calls compile. */
+export function mushroomArt(_cap: string, _spot: string, S = 128): MatSet {
+  return canArt(S);
 }
 
 // =============================================================================
 //  Projectile simulation
 // =============================================================================
 
-const SHELL_R = 0.42;
+const SHELL_R = 0.50;
 const GREEN_SPEED = 33;
 const RED_SPEED = 37;
 const BOMB_GRAVITY = 21;
@@ -641,6 +682,8 @@ export class Projectiles {
   readonly group = new THREE.Group();
   /** live obstacle list the AI steers around; rebuilt in place every frame */
   readonly hazards: HazardLike[] = [];
+  /** live thrown/towed items for VFX; rebuilt in place every frame */
+  readonly flights: import('../types').ItemFlight[] = [];
 
   private pool: Proj[] = [];
   private blasts: Blast[] = [];
@@ -648,6 +691,7 @@ export class Projectiles {
   private art = new Map<number, MatSet>();
   private line: RacingLine | null = null;
   private hazardPool: HazardLike[] = [];
+  private flightPool: import('../types').ItemFlight[] = [];
   private mobile = false;
 
   init(ctx: Ctx) {
@@ -662,14 +706,14 @@ export class Projectiles {
     const big = this.mobile ? 128 : 256;
     const small = this.mobile ? 64 : 128;
 
-    this.art.set(ItemKind.GreenShell, shellArt('#3fbf52', '#f2ece0', '#2b8f3d', 0.10, big));
-    this.art.set(ItemKind.RedShell, shellArt('#e8433f', '#f2ece0', '#a92a2c', 0.16, big));
-    this.art.set(ItemKind.Banana, bananaArt(small));
-    this.art.set(ItemKind.Bomb, bombArt(small));
+    this.art.set(ItemKind.GreenShell, bulletArt('#3fbf52', 0.22, false, big));
+    this.art.set(ItemKind.RedShell, bulletArt('#e8433f', 0.38, true, big));
+    this.art.set(ItemKind.Banana, lemonArt(small));
+    this.art.set(ItemKind.Bomb, mineArt(small));
 
     for (const a of this.art.values()) {
       if (ctx.envMap) a.mat.envMap = ctx.envMap;
-      a.mat.envMapIntensity = 0.9;
+      if (a.mat.envMapIntensity < 0.9) a.mat.envMapIntensity = 0.9;
     }
     // Remember what we adopted, so `setEnv` can tell a real change from the
     // echo `Items` sends on its first frame.
@@ -741,6 +785,13 @@ export class Projectiles {
 
     for (let i = 0; i < POOL + 8; i++) {
       this.hazardPool.push({ x: 0, y: 0, z: 0, r: 1, owner: -1 });
+    }
+    for (let i = 0; i < POOL; i++) {
+      this.flightPool.push({
+        id: i, kind: ItemKind.None,
+        pos: new THREE.Vector3(), vel: new THREE.Vector3(),
+        carried: false, targetId: -1,
+      });
     }
     ctx.scene.add(this.group);
   }
@@ -948,7 +999,9 @@ export class Projectiles {
   update(ctx: Ctx, dt: number, karts: readonly IKart[]) {
     this.shadows.begin();
     this.hazards.length = 0;
+    this.flights.length = 0;
     let hz = 0;
+    let fz = 0;
     // Shadow-casting distance for a 0.75 m prop. Every caster is an extra draw
     // per shadow cascade, and each of these already carries a blob shadow that
     // grounds it, so the real shadow only has to survive as far as it is
@@ -968,7 +1021,9 @@ export class Projectiles {
         for (let j = 0; j < karts.length; j++) if (karts[j].id === p.owner) owner = karts[j];
       }
       if (p.ownerLock > 0) p.ownerLock -= dt;
-      p.scale += (1 - p.scale) * Math.min(1, dt * 12);
+      // Overshoot pop — kids need the toy to *arrive*, not fade in.
+      p.scale += ((p.state === PState.Live && p.scale < 1.08 ? 1.18 : 1) - p.scale)
+        * Math.min(1, dt * 18);
 
       if (p.state === PState.Carried) {
         if (!owner || owner.finished) { this.kill(p); continue; }
@@ -988,11 +1043,22 @@ export class Projectiles {
       // --- present ---------------------------------------------------------
       p.mesh.position.copy(p.pos);
       p.mesh.scale.setScalar(p.scale);
-      this.orient(p, dt);
+      this.orient(p, dt, owner);
       const wantCast = shadowMax > 0 && p.pos.distanceToSquared(cam) < shadowMax * shadowMax;
       if (p.mesh.castShadow !== wantCast) p.mesh.castShadow = wantCast;
-      const r = p.kind === ItemKind.Banana ? 0.62 : 0.72;
+      const r = p.kind === ItemKind.Banana ? 0.78 : p.kind === ItemKind.Bomb ? 0.88 : 0.86;
       this.shadows.add(p.pos.x, p.pos.y - this.groundGap(p), p.pos.z, p.up, r * 2.2);
+
+      if (fz < this.flightPool.length) {
+        const f = this.flightPool[fz++];
+        f.id = p.index;
+        f.kind = p.kind;
+        f.pos.copy(p.pos);
+        f.vel.copy(p.vel);
+        f.carried = p.state === PState.Carried;
+        f.targetId = p.targetId;
+        this.flights.push(f);
+      }
 
       // --- publish as an obstacle -----------------------------------------
       if (hz < this.hazardPool.length) {
@@ -1009,7 +1075,9 @@ export class Projectiles {
   }
 
   private groundGap(p: Proj) {
-    return p.kind === ItemKind.Banana ? 0.14 : SHELL_R * 0.75;
+    if (p.kind === ItemKind.Banana) return 0.14;
+    if (p.kind === ItemKind.GreenShell || p.kind === ItemKind.RedShell) return 0.20;
+    return SHELL_R * 0.75;
   }
 
   private kill(p: Proj) {
@@ -1093,6 +1161,7 @@ export class Projectiles {
           p.vel.addScaledVector(hit.normal, -2 * vn);
           p.vel.multiplyScalar(0.94);
           p.bounces++;
+          ctx.bus.emit({ type: 'item-bounce', kind: p.kind, x: p.pos.x, y: p.pos.y, z: p.pos.z });
           // Nudge the reflection back toward the track direction; a shell that
           // bounces perfectly square just ping-pongs across the road forever.
           if (this.line) {
@@ -1317,19 +1386,39 @@ export class Projectiles {
     }
   }
 
-  /** Spin and lean. Shells roll along their travel; bananas just lie there. */
-  private orient(p: Proj, dt: number) {
+  /** Lemons wobble; bullets point their nose along travel. */
+  private orient(p: Proj, dt: number, owner?: IKart) {
     if (p.kind === ItemKind.Banana) {
       _q.setFromUnitVectors(UP, p.up);
       p.mesh.quaternion.copy(_q);
       p.mesh.rotateY(p.spin);
       if (p.state === PState.Carried) p.spin += dt * 1.4;
+      else if (p.vel.lengthSq() < 0.25) {
+        p.mesh.rotateZ(Math.sin(p.spin * 9) * 0.10);
+        p.spin += dt;
+      }
+      return;
+    }
+    if (p.kind === ItemKind.GreenShell || p.kind === ItemKind.RedShell) {
+      if (p.state === PState.Carried && owner) {
+        _dir.copy(owner.forward);
+        _dir.y = 0;
+        if (_dir.lengthSq() < 1e-6) _dir.set(0, 0, 1);
+        _dir.normalize().negate();
+      } else {
+        _dir.copy(p.vel);
+        _dir.y *= 0.25;
+        if (_dir.lengthSq() < 1e-6) _dir.set(0, 0, 1);
+        _dir.normalize();
+      }
+      _q.setFromUnitVectors(UP, _dir);
+      p.mesh.quaternion.copy(_q);
+      p.spin += dt * (p.state === PState.Carried ? 4 : 18);
+      p.mesh.rotateY(p.spin);
       return;
     }
     const speed = Math.hypot(p.vel.x, p.vel.z);
     p.spin += dt * (p.state === PState.Carried ? 2.2 : 3.4 + speed * 0.12);
-    // stand on the surface normal, spin about it, then lean into the travel
-    // direction so a shell reads as a body being thrown, not a spinning prop
     _q.setFromUnitVectors(UP, p.up);
     p.mesh.quaternion.copy(_q);
     p.mesh.rotateY(p.spin);

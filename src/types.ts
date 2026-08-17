@@ -235,6 +235,16 @@ export const enum ItemKind {
   Bomb = 8,
 }
 
+/** A live thrown or towed item, published each frame for VFX. */
+export interface ItemFlight {
+  id: number;
+  kind: ItemKind;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  carried: boolean;
+  targetId: number;
+}
+
 export interface IItems extends System {
   /** roll an item appropriate to `place` (1 = leading) */
   roll(place: number, racers: number): ItemKind;
@@ -245,6 +255,8 @@ export interface IItems extends System {
   use(kart: IKart, backwards: boolean): boolean;
   /** open the roulette on the HUD for this kart */
   pickup(kart: IKart): void;
+  /** live projectiles this frame — rebuilt in place, do not retain */
+  readonly flights: readonly ItemFlight[];
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +320,12 @@ export type GameEvent =
   | { type: 'collide'; kart: IKart; other: IKart | null; impulse: number }
   | { type: 'item-pickup'; kart: IKart }
   | { type: 'item-use'; kart: IKart; kind: ItemKind }
+  /** button was dead — empty, still spinning, or stunned */
+  | { type: 'item-refuse'; kart: IKart }
+  /** drove through an item box. `full` = slot already occupied, box stays */
+  | { type: 'item-box-break'; kart: IKart; x: number; y: number; z: number; full: boolean }
+  /** a bouncing float kissed a wall */
+  | { type: 'item-bounce'; kind: ItemKind; x: number; y: number; z: number }
   | { type: 'hit'; kart: IKart; kind: ItemKind }
   | { type: 'lap'; kart: IKart; lap: number }
   | { type: 'finish'; kart: IKart; place: number }
