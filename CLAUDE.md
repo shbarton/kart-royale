@@ -105,6 +105,35 @@ of them at once.
 **Worktrees need a `node_modules` symlink** or the `tools/*.mjs` harnesses will
 not start.
 
+**A keystroke aimed at a text field is not a keyboard.** `Input.onFirstKey`
+unmounts the touch pad on the first keypress, which is right — a real keypress
+means a real keyboard. Then the multiplayer lobby added a name field, and on a
+phone the on-screen keyboard's keydowns unmounted the controls *before the race
+started*: no stick, no drift, and the HUD reverted to its desktop layout
+because `html[data-touch]` went with it. The same gap fed the typing to the
+game as driving, and `SWALLOW` preventDefault'd Space, so a name could not
+contain one. Every keyboard listener in `Input.ts` now asks `typingInto` first.
+Guard: `tools/lobby-typing-test.mjs`.
+
+**A flat horizontal FOV clamp pins the VERTICAL on a wide screen.** `fitFov`
+bounds horizontal to `FOV_H_MAX`, which never binds at 16:9 and binds
+permanently on a landscape phone — where it pays for it out of the vertical.
+At 844x295 the vertical field was a CONSTANT 45.2 degrees whatever the rig
+asked for, so every degree the lens opened by on a boost was clamped away while
+the arm still came in and dropped: a boost cost road ahead and gave nothing
+back. The ceiling now lifts to whatever the aspect needs to carry `FOV_V_KEEP`.
+Probe: `tools/road-ahead.mjs`.
+
+**Resolution has two policies and only one of them is honest.** The pixel
+budget is in Mpx, the unit the cost actually scales with. `maxPixelRatio` is
+flat and blind to the viewport, and on a small one it binds FIRST and silently
+spends less than the tier declared — a landscape phone drew 0.56 Mpx against a
+1.5 Mpx budget on a 2.24 Mpx panel, which reads as "the car is sharp, the road
+ahead is blurry". The ceiling now moves in both directions, bounded by the
+panel's own dpr. This is the CLAUDE.md "one global constant applied uniformly
+to things that are not uniform" trap for the third time in this file; be
+suspicious of the next flat number you find. Probe: `tools/pixel-check.mjs`.
+
 ## Verifying a change
 
 The harnesses are the point of this repo more than the game is. Each one answers
